@@ -5,7 +5,7 @@ import {
   getMultiFactorResolver, multiFactor, onAuthStateChanged, signInWithEmailAndPassword, signOut,
   TotpMultiFactorGenerator,
 } from 'firebase/auth'
-import { approveRegistration, auth, createRegistration, getAdminAnalytics, listRegistrations, markTicketUsed, useLocalDevelopmentBackend, verifyRegistration } from './registrationService'
+import { approveRegistration, auth, createRegistration, getAdminAnalytics, listRegistrations, markTicketUsed, revokeTicket, useLocalDevelopmentBackend, verifyRegistration } from './registrationService'
 import { analyticsContext, trackJourney } from './analytics'
 import {
   Activity, ArrowRight, BadgeCheck, BarChart3, CalendarDays, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3,
@@ -66,6 +66,7 @@ function AdminDashboard() {
   const [needsMfa, setNeedsMfa] = useState(false)
   const [analytics, setAnalytics] = useState(null)
   const [analyticsDays, setAnalyticsDays] = useState(30)
+  const [revokeTarget, setRevokeTarget] = useState('')
   const videoRef = useRef(null)
   const streamRef = useRef(null)
 
@@ -143,6 +144,9 @@ function AdminDashboard() {
   async function checkIn() {
     try { const updated = await markTicketUsed(scanResult.id); setScanResult({ ...scanResult, ...updated }); await refresh() } catch (error) { setAdminError(error.message) }
   }
+  async function revoke(id) {
+    try { await revokeTicket(id); setRevokeTarget(''); await refresh() } catch (error) { setAdminError(error.message) }
+  }
 
   async function startScanner() {
     if (!navigator.mediaDevices?.getUserMedia || !('BarcodeDetector' in window)) { setCameraOn(false); return }
@@ -182,8 +186,8 @@ function AdminDashboard() {
     <section className="admin-main"><header><div><span>GGCE 2026</span><h1>Registration desk</h1></div><button onClick={exportRegistrations}><FileSpreadsheet/> Export CSV</button></header>
       {adminError && <div className="admin-alert">{adminError}</div>}<div className="admin-stats"><article><span>Total registrations</span><strong>{rows.length}</strong></article><article><span>Valid tickets</span><strong>{rows.filter(r=>r.status==='valid').length}</strong></article><article><span>Awaiting payment</span><strong>{rows.filter(r=>r.status==='pending').length}</strong></article></div>
       <AnalyticsPanel data={analytics} days={analyticsDays} setDays={setAnalyticsDays}/>
-      <section className="admin-panel" id="registrations"><div className="panel-head"><div><h2>Attendees</h2><p>View registrations and approve paid reservations.</p></div><label><Search/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search attendees"/></label></div><div className="admin-table"><div className="table-row table-labels"><span>Attendee</span><span>Pass</span><span>Reference</span><span>Status</span><span>Action</span></div>{filtered.map(r=><div className="table-row" key={r.id}><span><b>{r.firstName} {r.lastName}</b><small>{r.email}</small></span><span>{r.passName}</span><code>{r.id}</code><span className={`status-pill ${r.status}`}>{r.status === 'valid' ? 'Valid' : 'Awaiting payment'}</span><span>{r.status === 'pending' ? <button onClick={()=>approve(r.id)}>Mark paid</button> : <BadgeCheck/>}</span></div>)}{!filtered.length&&<div className="empty-table">No registrations found.</div>}</div></section>
-      <section className="scanner-panel" id="scanner"><div><span className="kicker">ENTRY VALIDATION</span><h2>Scan and verify tickets.</h2><p>Use the device camera or enter a ticket reference manually.</p>{!cameraOn ? <button className="camera-button" onClick={startScanner}><Camera/> Open QR scanner</button> : <button className="camera-button stop" onClick={stopScanner}>Stop camera</button>}</div><div className="scanner-box"><video ref={videoRef} className={cameraOn?'on':''} muted playsInline/><div className="manual-scan"><input value={scanValue} onChange={e=>setScanValue(e.target.value)} placeholder="GGCE26-A1B2C3"/><button onClick={()=>verifyScan()}><QrCode/> Verify</button></div>{scanResult !== undefined && <div className={`scan-result ${scanResult?.status || 'invalid'}`}>{scanResult ? <><BadgeCheck/><span><b>{scanResult.status === 'valid' ? 'Valid ticket' : scanResult.status === 'used' ? 'Already checked in' : 'Payment pending'}</b>{scanResult.firstName} {scanResult.lastName} · {scanResult.passName}</span>{scanResult.status === 'valid' && <button onClick={checkIn}>Check in attendee</button>}</> : <><X/><span><b>Ticket not found</b>Check the reference and try again.</span></>}</div>}</div></section>
+      <section className="admin-panel" id="registrations"><div className="panel-head"><div><h2>Attendees</h2><p>View registrations and approve paid reservations.</p></div><label><Search/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search attendees"/></label></div><div className="admin-table"><div className="table-row table-labels"><span>Attendee</span><span>Pass</span><span>Reference</span><span>Status</span><span>Action</span></div>{filtered.map(r=><div className="table-row" key={r.id}><span><b>{r.firstName} {r.lastName}</b><small>{r.email}</small></span><span>{r.passName}</span><code>{r.id}</code><span className={`status-pill ${r.status}`}>{r.status === 'valid' ? 'Valid' : r.status === 'pending' ? 'Awaiting payment' : r.status === 'used' ? 'Checked in' : r.status === 'revoked' ? 'Revoked' : 'Invalid'}</span><span className="row-actions">{r.status === 'pending' ? <button onClick={()=>approve(r.id)}>Mark paid</button> : r.status === 'revoked' ? <X aria-label="Revoked"/> : <><BadgeCheck/>{revokeTarget === r.id ? <button className="danger" onClick={()=>revoke(r.id)}>Confirm revoke</button> : <button className="danger ghost" onClick={()=>setRevokeTarget(r.id)}>Revoke</button>}</>}</span></div>)}{!filtered.length&&<div className="empty-table">No registrations found.</div>}</div></section>
+      <section className="scanner-panel" id="scanner"><div><span className="kicker">ENTRY VALIDATION</span><h2>Scan and verify tickets.</h2><p>Use the device camera or enter a ticket reference manually.</p>{!cameraOn ? <button className="camera-button" onClick={startScanner}><Camera/> Open QR scanner</button> : <button className="camera-button stop" onClick={stopScanner}>Stop camera</button>}</div><div className="scanner-box"><video ref={videoRef} className={cameraOn?'on':''} muted playsInline/><div className="manual-scan"><input value={scanValue} onChange={e=>setScanValue(e.target.value)} placeholder="GGCE26-A1B2C3"/><button onClick={()=>verifyScan()}><QrCode/> Verify</button></div>{scanResult !== undefined && <div className={`scan-result ${scanResult?.status || 'invalid'}`}>{scanResult ? <><BadgeCheck/><span><b>{scanResult.status === 'valid' ? 'Valid ticket' : scanResult.status === 'used' ? 'Already checked in' : scanResult.status === 'revoked' ? 'Revoked ticket' : 'Payment pending'}</b>{scanResult.firstName} {scanResult.lastName} · {scanResult.passName}</span>{scanResult.status === 'valid' && <button onClick={checkIn}>Check in attendee</button>}</> : <><X/><span><b>Ticket not found</b>Check the reference and try again.</span></>}</div>}</div></section>
     </section>
   </main>
 }

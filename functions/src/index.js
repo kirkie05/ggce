@@ -144,6 +144,21 @@ exports.adminMarkTicketUsed = onCall({ region, enforceAppCheck: true }, async re
   return { id, status: 'used' }
 })
 
+exports.adminRevokeTicket = onCall({ region, enforceAppCheck: true }, async request => {
+  requireAdmin(request)
+  const id = text(request.data?.id, 80).toUpperCase()
+  if (!id) throw new HttpsError('invalid-argument', 'Reference required.')
+  const registrationRef = db.collection('registrations').doc(id)
+  const ticketRef = db.collection('tickets').doc(id)
+  await db.runTransaction(async tx => {
+    const registration = await tx.get(registrationRef)
+    if (!registration.exists) throw new HttpsError('not-found', 'Registration not found.')
+    tx.update(registrationRef, { status: 'revoked', revokedAt: FieldValue.serverTimestamp(), revokedBy: request.auth.uid, updatedAt: FieldValue.serverTimestamp() })
+    tx.set(ticketRef, { id, registrationId: id, status: 'revoked', revokedAt: FieldValue.serverTimestamp(), revokedBy: request.auth.uid }, { merge: true })
+  })
+  return { id, status: 'revoked' }
+})
+
 exports.setAdminClaim = onCall({ region, enforceAppCheck: true }, async request => {
   // Bootstrap is allowed only for an existing admin; use the Firebase CLI/Admin SDK for the first administrator.
   requireAdmin(request); const uid = text(request.data?.uid, 128); if (!uid) throw new HttpsError('invalid-argument', 'User UID required.')

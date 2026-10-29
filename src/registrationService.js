@@ -43,6 +43,13 @@ export async function markTicketUsed(id) {
   saveLocal(rows); return rows.find(row => row.id === id)
 }
 
+export async function revokeTicket(id) {
+  if (functions) return (await httpsCallable(functions, 'adminRevokeTicket')({ id })).data
+  if (!devFallback) throw new Error('Ticket service is not configured.')
+  const rows = localRows().map(row => row.id === id ? { ...row, status: 'revoked', revokedAt: new Date().toISOString() } : row)
+  saveLocal(rows); return rows.find(row => row.id === id)
+}
+
 export async function trackAnalyticsEvent(payload) {
   if (functions) return (await httpsCallable(functions, 'trackAnalyticsEvent')(payload)).data
   if (!devFallback) return

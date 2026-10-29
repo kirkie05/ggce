@@ -105,3 +105,5 @@ html,body,#root{max-width:100%;overflow-x:hidden}
   .form-actions{grid-template-columns:64px minmax(0,1fr)}.form-actions .form-cta{font-size:12px}
   .reservation-success strong{font-size:16px;overflow-wrap:anywhere}
 }
+.row-actions{display:flex!important;align-items:center;gap:6px}.table-row button.danger{border-color:#9d3e32;background:#9d3e32;color:#fff}.table-row button.danger.ghost{background:#fff;color:#913f34}.status-pill.used{background:#e7eef8;color:#315d91}.status-pill.revoked{background:#f9dfda;color:#913f34}
+.scan-result.revoked{background:#f9dfda;color:#913f34}
