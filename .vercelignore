@@ -1,0 +1,11 @@
+GGCE Registration/
+functions/
+node_modules/
+dist/
+.git/
+.firebase/
+firebase.json
+firestore.rules
+PRODUCTION.md
+*.log
+.DS_Store

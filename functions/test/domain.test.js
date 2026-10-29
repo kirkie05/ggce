@@ -1,0 +1,11 @@
+const test = require('node:test')
+const assert = require('node:assert/strict')
+const { escapeHtml, passes, statusForPass, text, ticketId } = require('../src/domain')
+
+test('catalog contains every GGCE ticket type', () => assert.equal(Object.keys(passes).length, 6))
+test('free admission is valid immediately', () => assert.equal(statusForPass('general'), 'valid'))
+test('paid tickets remain pending', () => assert.equal(statusForPass('vip'), 'pending'))
+test('unknown passes are rejected', () => assert.equal(statusForPass('unknown'), null))
+test('ticket references are strong and correctly formatted', () => assert.match(ticketId(), /^GGCE26-[A-F0-9]{14}$/))
+test('input normalization trims and limits values', () => assert.equal(text('  abcdef  ', 3), 'abc'))
+test('email HTML values are escaped', () => assert.equal(escapeHtml('<b>O\'Neil & Co.</b>'), '&lt;b&gt;O&#39;Neil &amp; Co.&lt;/b&gt;'))
