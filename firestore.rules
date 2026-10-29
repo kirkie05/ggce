@@ -5,5 +5,8 @@ service cloud.firestore {
     match /registrations/{document=**} { allow read, write: if false; }
     match /tickets/{document=**} { allow read, write: if false; }
     match /rateLimits/{document=**} { allow read, write: if false; }
+    match /analyticsEvents/{document=**} { allow read, write: if false; }
+    match /adminAuditLogs/{document=**} { allow read, write: if false; }
+    match /_system/{document=**} { allow read, write: if false; }
   }
 }

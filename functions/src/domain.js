@@ -16,6 +16,10 @@ function escapeHtml(value) {
   })[character])
 }
 function ticketId() { return `GGCE26-${crypto.randomBytes(7).toString('hex').toUpperCase()}` }
+function ticketReference(value) {
+  const normalized = text(value, 32).toUpperCase()
+  return /^GGCE26-[A-F0-9]{14}$/.test(normalized) ? normalized : null
+}
 function statusForPass(passId) { return passes[passId]?.price === 0 ? 'valid' : passes[passId] ? 'pending' : null }
 
-module.exports = { escapeHtml, passes, statusForPass, text, ticketId }
+module.exports = { escapeHtml, passes, statusForPass, text, ticketId, ticketReference }

@@ -6,7 +6,7 @@ const { initializeApp } = require('firebase-admin/app')
 const { getAuth } = require('firebase-admin/auth')
 const { FieldValue, getFirestore, Timestamp } = require('firebase-admin/firestore')
 const crypto = require('node:crypto')
-const { escapeHtml, passes, statusForPass, text, ticketId } = require('./domain')
+const { escapeHtml, passes, statusForPass, text, ticketId, ticketReference } = require('./domain')
 
 initializeApp()
 const db = getFirestore()
@@ -18,6 +18,22 @@ const analyticsEvents = new Set(['page_view', 'registration_view', 'form_started
 
 function requireAdmin(request) {
   if (!request.auth?.token?.admin) throw new HttpsError('permission-denied', 'Administrator access required.')
+}
+function requireTicketReference(value) {
+  const id = ticketReference(value)
+  if (!id) throw new HttpsError('invalid-argument', 'A valid ticket reference is required.')
+  return id
+}
+function auditEntry(action, request, ticketIdValue = null, metadata = {}) {
+  return {
+    action,
+    actorUid: request.auth.uid,
+    actorEmail: text(request.auth.token.email, 180).toLowerCase(),
+    ticketId: ticketIdValue,
+    metadata,
+    createdAt: FieldValue.serverTimestamp(),
+    expiresAt: Timestamp.fromMillis(Date.now() + 400 * 86400000),
+  }
 }
 async function rateLimit(request, scope = 'registration', maximum = 8) {
   const ip = request.rawRequest?.ip || request.rawRequest?.headers?.['x-forwarded-for'] || 'unknown'
@@ -102,8 +118,8 @@ exports.adminGetAnalytics = onCall({ region, enforceAppCheck: true }, async requ
 })
 
 exports.verifyTicket = onCall({ region, enforceAppCheck: true }, async request => {
-  const id = text(request.data?.id, 80).toUpperCase()
-  if (!id) throw new HttpsError('invalid-argument', 'Ticket reference required.')
+  await rateLimit(request, request.auth?.token?.admin ? 'admin-verify' : 'public-verify', request.auth?.token?.admin ? 300 : 30)
+  const id = requireTicketReference(request.data?.id)
   const registration = await db.collection('registrations').doc(id).get()
   if (!registration.exists) return { ticket: null }
   const row = registration.data()
@@ -124,30 +140,39 @@ exports.adminListRegistrations = onCall({ region, enforceAppCheck: true }, async
 })
 
 exports.adminApprovePayment = onCall({ region, secrets: [resendKey], enforceAppCheck: true }, async request => {
-  requireAdmin(request); const id = text(request.data?.id, 80).toUpperCase(); if (!id) throw new HttpsError('invalid-argument', 'Reference required.')
+  requireAdmin(request); const id = requireTicketReference(request.data?.id)
   const ref = db.collection('registrations').doc(id)
   const row = await db.runTransaction(async tx => {
     const snap = await tx.get(ref); if (!snap.exists) throw new HttpsError('not-found', 'Registration not found.')
-    const data = snap.data(); tx.update(ref, { status: 'valid', approvedAt: FieldValue.serverTimestamp(), approvedBy: request.auth.uid, updatedAt: FieldValue.serverTimestamp() })
+    const data = snap.data()
+    if (data.status !== 'pending') throw new HttpsError('failed-precondition', 'Only pending reservations can be approved.')
+    tx.update(ref, { status: 'valid', approvedAt: FieldValue.serverTimestamp(), approvedBy: request.auth.uid, updatedAt: FieldValue.serverTimestamp() })
     tx.set(db.collection('tickets').doc(id), { id, registrationId: id, status: 'valid', scannedAt: null, createdAt: FieldValue.serverTimestamp() }, { merge: true }); return data
   })
+  await db.collection('adminAuditLogs').add(auditEntry('payment_approved', request, id, { previousStatus: row.status }))
   await sendEmail(row.email, 'Payment confirmed — your GGCE ticket is ready', `<h1>Your GGCE ticket is ready</h1><p>Hello ${escapeHtml(row.firstName)}, payment for <strong>${id}</strong> has been confirmed.</p><p>Open ${publicSiteUrl.value()}/?ticket=${id} to view your ticket.</p>`)
   return { id, status: 'valid' }
 })
 
 exports.adminMarkTicketUsed = onCall({ region, enforceAppCheck: true }, async request => {
-  requireAdmin(request); const id = text(request.data?.id, 80).toUpperCase(); const ref = db.collection('tickets').doc(id)
-  const snap = await ref.get(); if (!snap.exists) throw new HttpsError('not-found', 'Ticket not found.')
-  if (snap.data().scannedAt) throw new HttpsError('already-exists', 'Ticket has already been checked in.')
-  await ref.update({ scannedAt: FieldValue.serverTimestamp(), scannedBy: request.auth.uid, status: 'used' })
-  await db.collection('registrations').doc(id).update({ status: 'used', updatedAt: FieldValue.serverTimestamp() })
+  requireAdmin(request); const id = requireTicketReference(request.data?.id)
+  const ticketRef = db.collection('tickets').doc(id)
+  const registrationRef = db.collection('registrations').doc(id)
+  await db.runTransaction(async tx => {
+    const [ticket, registration] = await Promise.all([tx.get(ticketRef), tx.get(registrationRef)])
+    if (!ticket.exists || !registration.exists) throw new HttpsError('not-found', 'Ticket not found.')
+    if (ticket.data().status === 'used' || ticket.data().scannedAt) throw new HttpsError('already-exists', 'Ticket has already been checked in.')
+    if (ticket.data().status !== 'valid' || registration.data().status !== 'valid') throw new HttpsError('failed-precondition', 'Only valid tickets can be checked in.')
+    tx.update(ticketRef, { scannedAt: FieldValue.serverTimestamp(), scannedBy: request.auth.uid, status: 'used' })
+    tx.update(registrationRef, { status: 'used', updatedAt: FieldValue.serverTimestamp() })
+    tx.set(db.collection('adminAuditLogs').doc(), auditEntry('ticket_checked_in', request, id))
+  })
   return { id, status: 'used' }
 })
 
 exports.adminRevokeTicket = onCall({ region, enforceAppCheck: true }, async request => {
   requireAdmin(request)
-  const id = text(request.data?.id, 80).toUpperCase()
-  if (!id) throw new HttpsError('invalid-argument', 'Reference required.')
+  const id = requireTicketReference(request.data?.id)
   const registrationRef = db.collection('registrations').doc(id)
   const ticketRef = db.collection('tickets').doc(id)
   await db.runTransaction(async tx => {
@@ -155,14 +180,18 @@ exports.adminRevokeTicket = onCall({ region, enforceAppCheck: true }, async requ
     if (!registration.exists) throw new HttpsError('not-found', 'Registration not found.')
     tx.update(registrationRef, { status: 'revoked', revokedAt: FieldValue.serverTimestamp(), revokedBy: request.auth.uid, updatedAt: FieldValue.serverTimestamp() })
     tx.set(ticketRef, { id, registrationId: id, status: 'revoked', revokedAt: FieldValue.serverTimestamp(), revokedBy: request.auth.uid }, { merge: true })
+    tx.set(db.collection('adminAuditLogs').doc(), auditEntry('ticket_revoked', request, id, { previousStatus: registration.data().status }))
   })
   return { id, status: 'revoked' }
 })
 
 exports.setAdminClaim = onCall({ region, enforceAppCheck: true }, async request => {
   // Bootstrap is allowed only for an existing admin; use the Firebase CLI/Admin SDK for the first administrator.
-  requireAdmin(request); const uid = text(request.data?.uid, 128); if (!uid) throw new HttpsError('invalid-argument', 'User UID required.')
-  await getAuth().setCustomUserClaims(uid, { admin: true }); return { uid, admin: true }
+  requireAdmin(request); const uid = text(request.data?.uid, 128); if (!/^[A-Za-z0-9_-]{20,128}$/.test(uid)) throw new HttpsError('invalid-argument', 'Valid user UID required.')
+  const user = await getAuth().getUser(uid)
+  await getAuth().setCustomUserClaims(uid, { ...(user.customClaims || {}), admin: true })
+  await db.collection('adminAuditLogs').add(auditEntry('admin_claim_granted', request, null, { targetUid: uid }))
+  return { uid, admin: true }
 })
 
 exports.health = onRequest({ region }, async (_request, response) => {

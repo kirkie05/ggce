@@ -1,11 +1,16 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { escapeHtml, passes, statusForPass, text, ticketId } = require('../src/domain')
+const { escapeHtml, passes, statusForPass, text, ticketId, ticketReference } = require('../src/domain')
 
 test('catalog contains every GGCE ticket type', () => assert.equal(Object.keys(passes).length, 6))
 test('free admission is valid immediately', () => assert.equal(statusForPass('general'), 'valid'))
 test('paid tickets remain pending', () => assert.equal(statusForPass('vip'), 'pending'))
 test('unknown passes are rejected', () => assert.equal(statusForPass('unknown'), null))
 test('ticket references are strong and correctly formatted', () => assert.match(ticketId(), /^GGCE26-[A-F0-9]{14}$/))
+test('ticket reference validation rejects malformed document keys', () => {
+  assert.equal(ticketReference(' ggce26-22c632bce588c6 '), 'GGCE26-22C632BCE588C6')
+  assert.equal(ticketReference('../registrations/admin'), null)
+  assert.equal(ticketReference('GGCE26-123'), null)
+})
 test('input normalization trims and limits values', () => assert.equal(text('  abcdef  ', 3), 'abc'))
 test('email HTML values are escaped', () => assert.equal(escapeHtml('<b>O\'Neil & Co.</b>'), '&lt;b&gt;O&#39;Neil &amp; Co.&lt;/b&gt;'))
