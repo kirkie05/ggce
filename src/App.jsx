@@ -7,6 +7,8 @@ import {
 } from 'firebase/auth'
 import { approveRegistration, auth, createRegistration, getAdminAnalytics, listRegistrations, markTicketUsed, revokeTicket, useLocalDevelopmentBackend, verifyRegistration } from './registrationService'
 import { analyticsContext, trackJourney } from './analytics'
+import CookieConsent, { privacySettingsEvent } from './CookieConsent'
+import LegalCentre from './LegalCentre'
 import {
   Activity, ArrowRight, BadgeCheck, BarChart3, CalendarDays, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3,
   Download, FileSpreadsheet, Gem, Globe2, LogOut, Mail, MapPin, Menu, QrCode, Search, ShieldCheck,
@@ -193,6 +195,7 @@ function AdminDashboard() {
 }
 
 function App() {
+  if (location.pathname.startsWith('/legal')) return <LegalCentre />
   if (location.pathname.startsWith('/admin')) return <AdminDashboard />
   const [form, setForm] = useState(initialForm)
   const [step, setStep] = useState(1)
@@ -226,10 +229,12 @@ function App() {
   }
 
   useEffect(() => {
-    trackJourney('page_view', {}, false)
+    const trackPage = () => trackJourney('page_view', {}, false)
+    trackPage()
+    addEventListener('ggce-privacy-choice', trackPage)
     const observer = new IntersectionObserver(entries => { if (entries[0]?.isIntersecting) trackJourney('registration_view') }, { threshold: .35 })
     if (registrationRef.current) observer.observe(registrationRef.current)
-    return () => observer.disconnect()
+    return () => { observer.disconnect(); removeEventListener('ggce-privacy-choice', trackPage) }
   }, [])
 
   useEffect(() => {
@@ -338,7 +343,7 @@ function App() {
             <p className="form-intro">Choose the experience that works for you.</p>
             <div className="pass-options">{PASSES.map(p => <button key={p.id} className={form.pass === p.id ? 'pass-card selected' : 'pass-card'} onClick={() => update('pass', p.id)}><span className="radio">{form.pass === p.id && <i/>}</span><span><b>{p.name}</b><small>{p.note}</small></span><strong>{p.price}</strong></button>)}</div>
             <details><summary>Add professional details <span>Optional</span></summary><div className="grid two details-grid"><label>Organisation<input value={form.organisation} onChange={e => update('organisation', e.target.value)} placeholder="Company name"/></label><label>Job title<input value={form.role} onChange={e => update('role', e.target.value)} placeholder="Your role"/></label></div></details>
-            <label className="check"><input type="checkbox" checked={form.consent} onChange={e => update('consent', e.target.checked)} required/><span>{form.consent && <Check/>}</span>I agree to receive essential registration, payment and ticket updates. See the <a href="#privacy">privacy notice</a>.</label>
+            <label className="check"><input type="checkbox" checked={form.consent} onChange={e => update('consent', e.target.checked)} required/><span>{form.consent && <Check/>}</span>I agree to receive essential registration, payment and ticket updates and acknowledge the <a href="/legal/privacy" target="_blank">Privacy Notice</a> and <a href="/legal/event" target="_blank">Event Terms</a>.</label>
             <div className="form-actions"><button className="back" onClick={() => setStep(1)}>Back</button><button className="form-cta" onClick={register}>Confirm registration <ArrowRight/></button></div>
           </div>}
           {step === 3 && ticket && <div className="success">
@@ -373,9 +378,10 @@ function App() {
       <section className="verify" id="verify"><div><span className="kicker light">TICKET DESK</span><h2>Already registered?</h2><p>Enter your private ticket reference to view its current status.</p></div><div className="lookup"><label>Ticket reference</label><div><input value={lookup} onChange={e => setLookup(e.target.value)} onKeyDown={e => e.key === 'Enter' && verify()} placeholder="e.g. GGCE26-A1B2C3"/><button onClick={() => verify()}><QrCode/> Check pass</button></div>{lookupResult !== undefined && <div className={lookupResult ? (lookupResult.status === 'valid' ? 'result good' : 'result pending') : 'result bad'}>{lookupResult ? <><BadgeCheck/><span><b>{lookupResult.status === 'valid' ? 'Valid registration' : lookupResult.status === 'used' ? 'Already checked in' : 'Awaiting payment'}</b>{lookupResult.firstName} {lookupResult.lastName} · {lookupResult.passName}</span></> : <><X/><span><b>Pass not found</b>Check the ticket reference and try again.</span></>}</div>}</div></section>
 
       <section className="faq" id="faq"><div><span className="kicker">GOOD TO KNOW</span><h2>Questions,<br/>answered.</h2></div><div>{[['When will I receive my pass?','Immediately after registration. Your pass includes a unique QR code for fast entry.'],['Can I change my registration?','Yes. Contact the GGCE team with your ticket ID and the details you would like updated.'],['Can I register a group?','Yes. For groups and corporate bookings, contact the team for assisted registration.'],['What should I bring?','Bring the QR pass on your phone and a valid photo ID for verification.']].map(([q,a]) => <details key={q}><summary>{q}<span>+</span></summary><p>{a}</p></details>)}</div></section>
-      <section className="privacy" id="privacy"><span className="kicker">PRIVACY NOTICE</span><h2>How registration and journey data is used.</h2><div><p>GGCE collects the details you submit to manage your registration, issue and verify tickets, communicate payment or event information, and support entry at the venue. Registration and ticket records are available only to authorised event administrators.</p><p>We also record privacy-conscious journey events such as page views, registration steps, campaign source and device class to understand where visitors leave the registration process. We do not store raw visitor IP addresses in analytics. Journey events are scheduled for deletion after 400 days.</p><p>Essential registration communications are required to deliver your reference and ticket. For access, correction or deletion requests, contact <a href="mailto:ggcelagos@gmail.com">ggcelagos@gmail.com</a>.</p></div></section>
+      <section className="privacy" id="privacy"><span className="kicker">PRIVACY & TERMS</span><h2>Clear choices. Responsible registration.</h2><div><p>GGCE uses the details you submit to manage registration, reservations, tickets, essential event communication and secure entry. Optional journey analytics runs only if you accept it.</p><p>Our Legal Centre explains data use, ticket and event rules, refunds, browser storage, acceptable use and how to exercise your privacy rights.</p><p><a href="/legal">Open the Legal Centre →</a></p></div></section>
     </main>
-    <footer><Logo/><p>Africa’s premier Gold & Gemstone Conference & Exhibition.</p><div><a href="#privacy">Privacy</a><a href="mailto:ggcelagos@gmail.com">Contact</a><span>© 2026 GGCE</span></div></footer>
+    <footer><Logo/><p>Africa’s premier Gold & Gemstone Conference & Exhibition.</p><div><a href="/legal">Legal</a><a href="/legal/privacy">Privacy</a><a href="/legal/terms">Terms</a><a href="/legal/refunds">Refunds</a><button onClick={() => dispatchEvent(new Event(privacySettingsEvent))}>Cookie settings</button><a href="mailto:ggcelagos@gmail.com">Contact</a><span>© 2026 GGCE</span></div></footer>
+    <CookieConsent/>
   </>
 }
 

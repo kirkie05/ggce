@@ -75,7 +75,7 @@ exports.createRegistration = onCall({ region, secrets: [resendKey], enforceAppCh
     organisation: text(data.organisation, 120), role: text(data.role, 120), passId: text(data.passId, 40),
     passName: pass.name, amount: pass.price, status, sessionId: text(data.sessionId, 80),
     source: text(data.source, 100), campaign: text(data.campaign, 120),
-    consent: true, consentVersion: '2026-10-29', consentedAt: FieldValue.serverTimestamp(),
+    consent: true, consentVersion: '2026-10-30-v1.0', consentedAt: FieldValue.serverTimestamp(),
     createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
   }
   const batch = db.batch(); batch.create(db.collection('registrations').doc(id), registration)

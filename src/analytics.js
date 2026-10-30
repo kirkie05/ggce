@@ -2,6 +2,18 @@ import { trackAnalyticsEvent } from './registrationService'
 
 const sessionKey = 'ggce-visitor-session'
 const attributionKey = 'ggce-visitor-attribution'
+const privacyKey = 'ggce-privacy-choice-v1'
+
+export function getPrivacyChoice() {
+  try { return JSON.parse(localStorage.getItem(privacyKey) || 'null') } catch { return null }
+}
+
+export function setPrivacyChoice(analytics) {
+  localStorage.setItem(privacyKey, JSON.stringify({ essential: true, analytics, version: '1.0', updatedAt: new Date().toISOString() }))
+  dispatchEvent(new CustomEvent('ggce-privacy-choice', { detail: { analytics } }))
+}
+
+export function analyticsAllowed() { return getPrivacyChoice()?.analytics === true }
 
 function sourceFromReferrer(referrer) {
   if (!referrer) return 'Direct'
@@ -16,6 +28,7 @@ function sourceFromReferrer(referrer) {
 }
 
 export function analyticsContext() {
+  if (!analyticsAllowed()) return { source: 'Not collected', medium: 'Not collected', campaign: 'Not collected', device: 'Not collected', path: location.pathname }
   let sessionId = sessionStorage.getItem(sessionKey)
   if (!sessionId) { sessionId = crypto.randomUUID(); sessionStorage.setItem(sessionKey, sessionId) }
   let attribution
@@ -34,6 +47,7 @@ export function analyticsContext() {
 }
 
 export function trackJourney(name, properties = {}, once = true) {
+  if (!analyticsAllowed()) return
   const context = analyticsContext()
   const marker = `ggce-event-${context.sessionId}-${name}`
   if (once && sessionStorage.getItem(marker)) return
