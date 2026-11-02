@@ -6,15 +6,20 @@ const { initializeApp } = require('firebase-admin/app')
 const { getAuth } = require('firebase-admin/auth')
 const { FieldValue, getFirestore, Timestamp } = require('firebase-admin/firestore')
 const crypto = require('node:crypto')
-const { escapeHtml, passes, statusForPass, text, ticketId, ticketReference } = require('./domain')
+const { escapeHtml, lookupKey, normalizeEmail, normalizePhone, passes, statusForPass, text, ticketId, ticketReference } = require('./domain')
 
 initializeApp()
 const db = getFirestore()
 const resendKey = defineSecret('RESEND_API_KEY')
+const metaCapiToken = defineSecret('META_CAPI_TOKEN')
+const metaPixelId = defineString('META_PIXEL_ID', { default: '' })
 const publicSiteUrl = defineString('PUBLIC_SITE_URL', { default: 'https://example.com' })
 const monitorAlertEmail = defineString('MONITOR_ALERT_EMAIL', { default: 'admin@example.com' })
 const region = 'us-central1'
-const analyticsEvents = new Set(['page_view', 'registration_view', 'form_started', 'details_completed', 'pass_selected', 'registration_completed'])
+const analyticsEvents = new Set(['page_view', 'registration_view', 'form_started', 'form_error', 'details_completed', 'pass_selected', 'registration_completed'])
+const professionalCategories = new Set(['Student / Job Seeker','Entrepreneur','Jewelry Designer','Gemstone Trader','Gold Dealer','Miner','Manufacturer','Retailer','Investor','Industry Professional','Other'])
+const eventInterests = new Set(['General Exhibition Attendance','Conference','Masterclasses','Investment Forum','Jewelry Design Competition','Gala Night'])
+const leadStatuses = new Set(['New','Contacted','Qualified','Follow-up Required','Payment Pending','Payment Confirmed','Closed / Not Interested'])
 
 function requireAdmin(request) {
   if (!request.auth?.token?.admin) throw new HttpsError('permission-denied', 'Administrator access required.')
@@ -62,28 +67,61 @@ async function sendEmail(to, subject, html) {
   return true
 }
 
-exports.createRegistration = onCall({ region, secrets: [resendKey], enforceAppCheck: true }, async request => {
+async function sendMetaEvent(eventName, eventId, user, customData = {}) {
+  const token = metaCapiToken.value(), pixelId = metaPixelId.value()
+  if (!token || !pixelId || !eventId) return
+  const userData = {}
+  if (user.email) userData.em = [crypto.createHash('sha256').update(normalizeEmail(user.email)).digest('hex')]
+  if (user.phone) userData.ph = [crypto.createHash('sha256').update(normalizePhone(user.phone)).digest('hex')]
+  const response = await fetch(`https://graph.facebook.com/v22.0/${pixelId}/events?access_token=${encodeURIComponent(token)}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: [{
+      event_name: eventName, event_time: Math.floor(Date.now() / 1000), event_id: eventId,
+      action_source: 'website', event_source_url: publicSiteUrl.value(), user_data: userData, custom_data: customData,
+    }] }),
+  })
+  if (!response.ok) console.error('Meta Conversions API failed', response.status, await response.text())
+}
+
+exports.createRegistration = onCall({ region, secrets: [resendKey, metaCapiToken], enforceAppCheck: true }, async request => {
   await rateLimit(request, 'registration', 8)
   const data = request.data || {}; const pass = passes[text(data.passId, 40)]
   if (!pass) throw new HttpsError('invalid-argument', 'Select a valid pass.')
-  const firstName = text(data.firstName, 60), lastName = text(data.lastName, 60), email = text(data.email, 180).toLowerCase()
+  const firstName = text(data.firstName, 60), lastName = text(data.lastName, 60), email = normalizeEmail(data.email), phone = normalizePhone(data.phone)
   if (!firstName || !lastName || !/^\S+@\S+\.\S+$/.test(email)) throw new HttpsError('invalid-argument', 'Valid name and email are required.')
   if (data.consent !== true) throw new HttpsError('failed-precondition', 'Consent to essential event communications is required.')
-  const id = ticketId(), status = statusForPass(text(data.passId, 40))
+  const category = text(data.professionalCategory, 80)
+  const interests = Array.isArray(data.interests) ? [...new Set(data.interests.map(value => text(value, 80)).filter(value => eventInterests.has(value)))].slice(0, 6) : []
+  if (!professionalCategories.has(category)) throw new HttpsError('invalid-argument', 'Select a valid professional category.')
+  if (!interests.length) throw new HttpsError('invalid-argument', 'Select at least one event interest.')
+  const id = ticketId(), status = statusForPass(text(data.passId, 40)), eventId = text(data.eventId, 100)
   const registration = {
-    id, firstName, lastName, email, phone: text(data.phone, 40), country: text(data.country, 80),
+    id, firstName, lastName, email, phone, country: text(data.country, 80),
     organisation: text(data.organisation, 120), role: text(data.role, 120), passId: text(data.passId, 40),
-    passName: pass.name, amount: pass.price, status, sessionId: text(data.sessionId, 80),
-    source: text(data.source, 100), campaign: text(data.campaign, 120),
+    professionalCategory: category, interests, marketingConsent: data.marketingConsent === true, analyticsConsent: data.analyticsConsent === true,
+    passName: pass.name, amount: pass.price, status, leadStatus: status === 'valid' ? 'Qualified' : 'Payment Pending', adminNotes: '', followUpDate: null,
+    sessionId: text(data.sessionId, 80), source: text(data.source, 100), medium: text(data.medium, 80), campaign: text(data.campaign, 120),
+    utmContent: text(data.utmContent, 120), utmTerm: text(data.utmTerm, 120), fbclid: text(data.fbclid, 220),
+    initialLandingPage: text(data.initialLandingPage, 220), referringUrl: text(data.referringUrl, 300),
     consent: true, consentVersion: '2026-10-30-v1.0', consentedAt: FieldValue.serverTimestamp(),
     createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
   }
-  const batch = db.batch(); batch.create(db.collection('registrations').doc(id), registration)
-  if (status === 'valid') batch.create(db.collection('tickets').doc(id), { id, registrationId: id, status: 'valid', scannedAt: null, createdAt: FieldValue.serverTimestamp() })
-  await batch.commit()
+  const emailLookup = db.collection('registrationLookup').doc(lookupKey('email', email))
+  const phoneLookup = phone ? db.collection('registrationLookup').doc(lookupKey('phone', phone)) : null
+  await db.runTransaction(async tx => {
+    const lookups = await Promise.all([tx.get(emailLookup), ...(phoneLookup ? [tx.get(phoneLookup)] : [])])
+    if (lookups.some(snap => snap.exists)) throw new HttpsError('already-exists', 'A registration already exists for this email or phone number. Contact GGCE support to make a correction.')
+    tx.create(db.collection('registrations').doc(id), registration)
+    tx.create(emailLookup, { registrationId: id, type: 'email', createdAt: FieldValue.serverTimestamp() })
+    if (phoneLookup) tx.create(phoneLookup, { registrationId: id, type: 'phone', createdAt: FieldValue.serverTimestamp() })
+    if (status === 'valid') tx.create(db.collection('tickets').doc(id), { id, registrationId: id, status: 'valid', scannedAt: null, createdAt: FieldValue.serverTimestamp() })
+  })
   const safeFirstName = escapeHtml(firstName)
   if (status === 'valid') await sendEmail(email, 'Your GGCE 2026 entry pass', `<h1>Registration confirmed</h1><p>Hello ${safeFirstName}, your ticket reference is <strong>${id}</strong>.</p><p>Open ${publicSiteUrl.value()}/?ticket=${id} to view your registration.</p>`)
   else await sendEmail(email, 'Your GGCE 2026 reservation', `<h1>Your place is reserved</h1><p>Hello ${safeFirstName}, use <strong>${id}</strong> as your payment reference. The GGCE team will send payment details shortly.</p>`)
+  if (registration.analyticsConsent) {
+    await sendMetaEvent('Lead', eventId, { email, phone }, { content_name: pass.name, value: pass.price, currency: 'NGN' })
+    if (status === 'valid') await sendMetaEvent('CompleteRegistration', `${eventId}-complete`, { email, phone }, { content_name: pass.name, value: 0, currency: 'NGN' })
+  }
   return { ...registration, createdAt: new Date().toISOString() }
 })
 
@@ -95,7 +133,7 @@ exports.trackAnalyticsEvent = onCall({ region, enforceAppCheck: true }, async re
   await db.collection('analyticsEvents').add({
     name, sessionId, source: text(data.source, 100) || 'Direct', campaign: text(data.campaign, 120) || 'None',
     medium: text(data.medium, 80) || 'None', device: text(data.device, 30) || 'Unknown',
-    path: text(data.path, 180), passId: text(data.passId, 40), createdAt: FieldValue.serverTimestamp(),
+    path: text(data.path, 180), passId: text(data.passId, 40), fields: text(data.fields, 300), createdAt: FieldValue.serverTimestamp(),
     expiresAt: Timestamp.fromMillis(Date.now() + 400 * 86400000),
   })
   return { tracked: true }
@@ -113,8 +151,18 @@ exports.adminGetAnalytics = onCall({ region, enforceAppCheck: true }, async requ
     events.filter(event => event.name === 'page_view').forEach(event => { const label = event[key] || 'Unknown'; (buckets[label] ||= new Set()).add(event.sessionId) })
     return Object.entries(buckets).map(([label, sessions]) => ({ label, value: sessions.size })).sort((a, b) => b.value - a.value).slice(0, 8)
   }
-  const funnel = ['page_view','registration_view','form_started','details_completed','pass_selected','registration_completed'].map(name => ({ name, sessions: unique(name) }))
-  return { days, visitors: unique(), pageViews: events.filter(event => event.name === 'page_view').length, registrations: unique('registration_completed'), funnel, sources: group('source'), campaigns: group('campaign'), devices: group('device') }
+  const funnel = ['page_view','registration_view','pass_selected','form_started','details_completed','registration_completed'].map(name => ({ name, sessions: unique(name) }))
+  const registrationsSnap = await db.collection('registrations').where('createdAt', '>=', cutoff).limit(10000).get()
+  const registrations = registrationsSnap.docs.map(doc => doc.data())
+  const countBy = key => Object.entries(registrations.reduce((out, row) => { const values = Array.isArray(row[key]) ? row[key] : [row[key] || 'Unknown']; values.forEach(value => out[value] = (out[value] || 0) + 1); return out }, {})).map(([label,value])=>({label,value})).sort((a,b)=>b.value-a.value)
+  const dailyBuckets = {}
+  registrations.forEach(row => { const date = row.createdAt?.toDate?.().toISOString().slice(0,10) || 'Unknown'; dailyBuckets[date] = (dailyBuckets[date] || 0) + 1 })
+  const daily = Object.entries(dailyBuckets).map(([label,value])=>({label,value})).sort((a,b)=>a.label.localeCompare(b.label))
+  return { days, visitors: unique(), pageViews: events.filter(event => event.name === 'page_view').length, registrations: registrations.length, funnel, sources: group('source'), campaigns: group('campaign'), devices: group('device'),
+    freeRegistrations: registrations.filter(row => row.amount === 0).length, paidLeads: registrations.filter(row => row.amount > 0).length,
+    paymentPending: registrations.filter(row => row.status === 'pending').length, paymentConfirmed: registrations.filter(row => row.amount > 0 && ['valid','used'].includes(row.status)).length,
+    categories: countBy('professionalCategory').slice(0,10), interests: countBy('interests').slice(0,10), daily,
+  }
 })
 
 exports.verifyTicket = onCall({ region, enforceAppCheck: true }, async request => {
@@ -139,19 +187,32 @@ exports.adminListRegistrations = onCall({ region, enforceAppCheck: true }, async
   return { registrations: snap.docs.map(doc => ({ ...doc.data(), id: doc.id, createdAt: doc.data().createdAt?.toDate?.().toISOString() || null })) }
 })
 
-exports.adminApprovePayment = onCall({ region, secrets: [resendKey], enforceAppCheck: true }, async request => {
+exports.adminApprovePayment = onCall({ region, secrets: [resendKey, metaCapiToken], enforceAppCheck: true }, async request => {
   requireAdmin(request); const id = requireTicketReference(request.data?.id)
   const ref = db.collection('registrations').doc(id)
   const row = await db.runTransaction(async tx => {
     const snap = await tx.get(ref); if (!snap.exists) throw new HttpsError('not-found', 'Registration not found.')
     const data = snap.data()
     if (data.status !== 'pending') throw new HttpsError('failed-precondition', 'Only pending reservations can be approved.')
-    tx.update(ref, { status: 'valid', approvedAt: FieldValue.serverTimestamp(), approvedBy: request.auth.uid, updatedAt: FieldValue.serverTimestamp() })
+    tx.update(ref, { status: 'valid', leadStatus: 'Payment Confirmed', approvedAt: FieldValue.serverTimestamp(), approvedBy: request.auth.uid, updatedAt: FieldValue.serverTimestamp() })
     tx.set(db.collection('tickets').doc(id), { id, registrationId: id, status: 'valid', scannedAt: null, createdAt: FieldValue.serverTimestamp() }, { merge: true }); return data
   })
   await db.collection('adminAuditLogs').add(auditEntry('payment_approved', request, id, { previousStatus: row.status }))
   await sendEmail(row.email, 'Payment confirmed — your GGCE ticket is ready', `<h1>Your GGCE ticket is ready</h1><p>Hello ${escapeHtml(row.firstName)}, payment for <strong>${id}</strong> has been confirmed.</p><p>Open ${publicSiteUrl.value()}/?ticket=${id} to view your ticket.</p>`)
+  if (row.analyticsConsent) await sendMetaEvent('Purchase', `purchase-${id}`, row, { content_name: row.passName, value: row.amount, currency: 'NGN' })
   return { id, status: 'valid' }
+})
+
+exports.adminUpdateRegistration = onCall({ region, enforceAppCheck: true }, async request => {
+  requireAdmin(request); const id = requireTicketReference(request.data?.id)
+  const leadStatus = text(request.data?.leadStatus, 40), adminNotes = text(request.data?.adminNotes, 2000), followUpDate = text(request.data?.followUpDate, 20)
+  if (!leadStatuses.has(leadStatus)) throw new HttpsError('invalid-argument', 'Select a valid lead status.')
+  if (followUpDate && !/^\d{4}-\d{2}-\d{2}$/.test(followUpDate)) throw new HttpsError('invalid-argument', 'Follow-up date must use YYYY-MM-DD.')
+  const ref = db.collection('registrations').doc(id); const snapshot = await ref.get()
+  if (!snapshot.exists) throw new HttpsError('not-found', 'Registration not found.')
+  await ref.update({ leadStatus, adminNotes, followUpDate: followUpDate || null, updatedAt: FieldValue.serverTimestamp() })
+  await db.collection('adminAuditLogs').add(auditEntry('registration_updated', request, id, { leadStatus, followUpDate: followUpDate || null }))
+  return { id, leadStatus, adminNotes, followUpDate: followUpDate || null }
 })
 
 exports.adminMarkTicketUsed = onCall({ region, enforceAppCheck: true }, async request => {

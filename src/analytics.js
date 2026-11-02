@@ -28,7 +28,7 @@ function sourceFromReferrer(referrer) {
 }
 
 export function analyticsContext() {
-  if (!analyticsAllowed()) return { source: 'Not collected', medium: 'Not collected', campaign: 'Not collected', device: 'Not collected', path: location.pathname }
+  if (!analyticsAllowed()) return { analyticsConsent: false, source: 'Not collected', medium: 'Not collected', campaign: 'Not collected', device: 'Not collected', path: location.pathname }
   let sessionId = sessionStorage.getItem(sessionKey)
   if (!sessionId) { sessionId = crypto.randomUUID(); sessionStorage.setItem(sessionKey, sessionId) }
   let attribution
@@ -39,11 +39,16 @@ export function analyticsContext() {
       source: params.get('utm_source') || sourceFromReferrer(document.referrer),
       medium: params.get('utm_medium') || (document.referrer ? 'referral' : 'none'),
       campaign: params.get('utm_campaign') || 'None',
+      utmContent: params.get('utm_content') || '',
+      utmTerm: params.get('utm_term') || '',
+      fbclid: params.get('fbclid') || '',
+      initialLandingPage: `${location.pathname}${location.search}${location.hash}`,
+      referringUrl: document.referrer || '',
     }
     localStorage.setItem(attributionKey, JSON.stringify(attribution))
   }
   const device = matchMedia('(max-width: 680px)').matches ? 'Mobile' : matchMedia('(max-width: 1050px)').matches ? 'Tablet' : 'Desktop'
-  return { sessionId, ...attribution, device, path: `${location.pathname}${location.hash}` }
+  return { analyticsConsent: true, sessionId, ...attribution, device, path: `${location.pathname}${location.hash}` }
 }
 
 export function trackJourney(name, properties = {}, once = true) {

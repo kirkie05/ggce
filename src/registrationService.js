@@ -50,6 +50,13 @@ export async function revokeTicket(id) {
   saveLocal(rows); return rows.find(row => row.id === id)
 }
 
+export async function updateRegistration(id, updates) {
+  if (functions) return (await httpsCallable(functions, 'adminUpdateRegistration')({ id, ...updates })).data
+  if (!devFallback) throw new Error('Admin service is not configured.')
+  const rows = localRows().map(row => row.id === id ? { ...row, ...updates, updatedAt: new Date().toISOString() } : row)
+  saveLocal(rows); return rows.find(row => row.id === id)
+}
+
 export async function trackAnalyticsEvent(payload) {
   if (functions) return (await httpsCallable(functions, 'trackAnalyticsEvent')(payload)).data
   if (!devFallback) return
@@ -69,8 +76,10 @@ export async function getAdminAnalytics(days = 30) {
     events.filter(event => event.name === 'page_view').forEach(event => { const label = event[key] || 'Unknown'; (buckets[label] ||= new Set()).add(event.sessionId) })
     return Object.entries(buckets).map(([label, sessions]) => ({ label, value: sessions.size })).sort((a,b) => b.value-a.value).slice(0, 8)
   }
-  const funnel = ['page_view','registration_view','form_started','details_completed','pass_selected','registration_completed'].map(name => ({ name, sessions: unique(name) }))
-  return { days, visitors: unique(), pageViews: events.filter(e => e.name === 'page_view').length, registrations: unique('registration_completed'), funnel, sources: group('source'), campaigns: group('campaign'), devices: group('device') }
+  const funnel = ['page_view','registration_view','pass_selected','form_started','details_completed','registration_completed'].map(name => ({ name, sessions: unique(name) }))
+  const rows = localRows().filter(row => new Date(row.createdAt).getTime() >= cutoff)
+  const countBy = key => Object.entries(rows.reduce((out,row)=>{ const values=Array.isArray(row[key])?row[key]:[row[key]||'Unknown']; values.forEach(value=>out[value]=(out[value]||0)+1); return out },{})).map(([label,value])=>({label,value})).sort((a,b)=>b.value-a.value)
+  return { days, visitors: unique(), pageViews: events.filter(e => e.name === 'page_view').length, registrations: rows.length, funnel, sources: group('source'), campaigns: group('campaign'), devices: group('device'), freeRegistrations: rows.filter(row=>row.amount===0||row.passId==='general').length, paidLeads: rows.filter(row=>(row.amount||0)>0||row.passId!=='general').length, paymentPending: rows.filter(row=>row.status==='pending').length, paymentConfirmed: rows.filter(row=>(row.amount||0)>0&&['valid','used'].includes(row.status)).length, categories: countBy('professionalCategory'), interests: countBy('interests'), daily: [] }
 }
 
 export function useLocalDevelopmentBackend() { return devFallback }

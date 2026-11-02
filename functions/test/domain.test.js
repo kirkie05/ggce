@@ -1,6 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { escapeHtml, passes, statusForPass, text, ticketId, ticketReference } = require('../src/domain')
+const { escapeHtml, lookupKey, normalizeEmail, normalizePhone, passes, statusForPass, text, ticketId, ticketReference } = require('../src/domain')
 
 test('catalog contains every GGCE ticket type', () => assert.equal(Object.keys(passes).length, 6))
 test('free admission is valid immediately', () => assert.equal(statusForPass('general'), 'valid'))
@@ -14,3 +14,9 @@ test('ticket reference validation rejects malformed document keys', () => {
 })
 test('input normalization trims and limits values', () => assert.equal(text('  abcdef  ', 3), 'abc'))
 test('email HTML values are escaped', () => assert.equal(escapeHtml('<b>O\'Neil & Co.</b>'), '&lt;b&gt;O&#39;Neil &amp; Co.&lt;/b&gt;'))
+test('duplicate matching normalizes email and phone values', () => {
+  assert.equal(normalizeEmail('  Ada@Example.COM '), 'ada@example.com')
+  assert.equal(normalizePhone('+234 (800) 123-4567'), '+2348001234567')
+  assert.equal(lookupKey('email', 'Ada@example.com'), lookupKey('email', 'Ada@example.com'))
+  assert.notEqual(lookupKey('email', 'Ada@example.com'), lookupKey('phone', 'Ada@example.com'))
+})

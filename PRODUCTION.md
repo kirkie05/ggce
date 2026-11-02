@@ -13,7 +13,7 @@ The public Vite application deploys to Vercel. Firebase provides Authentication,
 
 ## 2. Configure the frontend
 
-Copy every `VITE_FIREBASE_*` and `VITE_RECAPTCHA_ENTERPRISE_SITE_KEY` value from `.env.example` into Vercel project environment variables. Do not set `VITE_ADMIN_PIN` in Vercel.
+Copy every `VITE_FIREBASE_*` and `VITE_RECAPTCHA_ENTERPRISE_SITE_KEY` value from `.env.example` into Vercel project environment variables. Add `VITE_META_PIXEL_ID` only when a verified GGCE Meta Pixel is available. Do not set `VITE_ADMIN_PIN` in Vercel.
 
 ## 3. Configure and deploy Firebase
 
@@ -24,6 +24,7 @@ cd ..
 firebase login
 firebase use --add
 firebase functions:secrets:set RESEND_API_KEY
+firebase functions:secrets:set META_CAPI_TOKEN
 firebase deploy --only firestore:rules,functions
 ```
 
@@ -64,6 +65,8 @@ Import the repository into Vercel. The included `vercel.json` builds `dist`, pre
 The admin dashboard reports unique sessions, page opens, registrations, conversion,
 traffic source, UTM campaign, device class, and drop-off at each registration step.
 It does not store raw visitor IP addresses.
+
+Meta Pixel and Conversions API events are emitted only after the visitor accepts analytics cookies. Browser and server events share event IDs for deduplication. Do not configure the Pixel or CAPI secret until the organisation has approved the tracking purpose and updated the privacy notice.
 
 Create campaign links like:
 
