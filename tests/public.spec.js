@@ -16,9 +16,19 @@ test('registration communications consent is explicit and initially unchecked', 
   await page.getByLabel('First name *').fill('Automated')
   await page.getByLabel('Last name *').fill('Test')
   await page.getByLabel(/Email address/).fill('automation@example.com')
-  const consent = page.getByLabel(/I agree to receive essential registration/)
+  const consent = page.getByLabel(/I agree to receive my complimentary event publication/)
   await expect(consent).not.toBeChecked()
   await expect(page.getByText(/essential registration, payment and ticket updates/)).toBeVisible()
+})
+
+test('book offer is visible and gated behind event registration', async ({ page }) => {
+  await page.goto('/#book')
+  await expect(page.getByRole('heading', { name: /million-naira opportunity/ })).toBeVisible()
+  await expect(page.getByAltText(/The Million Naira Opportunity/)).toBeVisible()
+  await expect(page.getByText('Available to registered attendees')).toBeVisible()
+  await page.getByRole('link', { name: /Register and get the free book/ }).click()
+  await expect(page.locator('#register')).toBeInViewport()
+  await expect(page.getByRole('heading', { name: 'Register in minutes.' })).toBeVisible()
 })
 
 test('campaign landing pages preserve focused messaging and registration route', async ({ page }) => {
