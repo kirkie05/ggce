@@ -228,6 +228,11 @@ function InvestmentForumLanding() {
   const heroOpacity = useTransform(scrollY, [0, 620], [1, .28])
   const update = (key, value) => { setForm(current => ({ ...current, [key]:value })); setErrors(current => ({ ...current, [key]:'' })) }
   const scrollToForm = event => { event?.preventDefault(); document.getElementById('investment-register')?.scrollIntoView({ behavior:'smooth', block:'start' }) }
+  useEffect(() => {
+    if (location.hash !== '#investments') return
+    const frame = requestAnimationFrame(() => document.getElementById('investment-register')?.scrollIntoView({ block:'start' }))
+    return () => cancelAnimationFrame(frame)
+  }, [])
 
   async function submit(event) {
     event.preventDefault()
@@ -271,13 +276,6 @@ function InvestmentForumLanding() {
         <div className="scroll-mark"><span>SCROLL TO EXPLORE</span><i/></div>
       </section>
 
-      <section className="investment-intro" id="programme"><div><span className="kicker">EXECUTIVE FORUM</span><h2>Where capital meets <em>credible opportunity.</em></h2></div><p>Join investors, operators, policy leaders and industry stakeholders for a focused conversation on unlocking value across Africa’s gold and gemstone economy—from responsible extraction and processing to trade, manufacturing and market expansion.</p></section>
-      <section className="investment-features" aria-label="Forum programme"><article><span>01</span><Users/><h3>Keynote</h3><p>Strategic perspectives on investment, market development and the future of the sector.</p></article><article><span>02</span><BarChart3/><h3>Panel session</h3><p>Direct insight from leaders working across finance, trade, mining and enterprise.</p></article><article><span>03</span><Sparkles/><h3>Fireside chat</h3><p>A candid conversation on capital, risk, value creation and responsible growth.</p></article><article><span>04</span><Globe2/><h3>Networking</h3><p>Purposeful introductions in an executive setting designed for meaningful exchange.</p></article></section>
-
-      <section className="investment-audience" aria-labelledby="audience-title"><div className="audience-heading"><span className="kicker light">DESIGNED FOR DECISION-MAKERS</span><h2 id="audience-title">The people who move <em>capital and markets.</em></h2><p>A curated room for senior leaders evaluating risk, opportunity and long-term value in Africa’s mineral economy.</p></div><div className="audience-list">{INVESTMENT_AUDIENCE.map((item,index)=><article key={item}><span>0{index+1}</span><BadgeCheck/><h3>{item}</h3></article>)}</div></section>
-
-      <section className="investment-thesis"><div><span className="kicker">THE INVESTMENT CONVERSATION</span><h2>From mineral wealth to <em>bankable value.</em></h2><p>The forum brings finance and industry into one practical conversation—connecting capital allocation with credible operators, responsible growth and market-ready opportunities.</p></div><div className="thesis-grid"><article><strong>Capital</strong><p>Explore structures, partnerships and pathways that can unlock investment.</p></article><article><strong>Risk</strong><p>Understand the governance, market and operating considerations shaping decisions.</p></article><article><strong>Value</strong><p>Identify opportunities across processing, manufacturing, trade and export.</p></article></div></section>
-
       <section className="investment-register" id="investment-register">
         <motion.div className="investment-poster" initial={{opacity:0,x:-30}} whileInView={{opacity:1,x:0}} viewport={{once:true,amount:.15}}><img src="/Gold%20and%20Gemstone%20Investment%20Forum.png" alt="GGCE Investment Forum — Wednesday 25 November 2026 at Lagos Oriental Hotel"/></motion.div>
         <motion.div className="investment-form-card" initial={{opacity:0,y:30}} whileInView={{opacity:1,y:0}} viewport={{once:true,amount:.15}}>
@@ -293,6 +291,14 @@ function InvestmentForumLanding() {
           </form> : <div className="investment-success"><BadgeCheck/><span className="kicker">REGISTRATION CONFIRMED</span><h2>Your place at the forum is confirmed.</h2><p>We have sent the event details to <b>{confirmation.email}</b>. Keep this reference for your records.</p><div><small>REGISTRATION REFERENCE</small><strong>{confirmation.id}</strong></div><button onClick={addForumCalendar}><CalendarDays/> Add to calendar</button></div>}
         </motion.div>
       </section>
+
+      <section className="investment-intro" id="programme"><div><span className="kicker">EXECUTIVE FORUM</span><h2>Where capital meets <em>credible opportunity.</em></h2></div><p>Join investors, operators, policy leaders and industry stakeholders for a focused conversation on unlocking value across Africa’s gold and gemstone economy—from responsible extraction and processing to trade, manufacturing and market expansion.</p></section>
+      <section className="investment-features" aria-label="Forum programme"><article><span>01</span><Users/><h3>Keynote</h3><p>Strategic perspectives on investment, market development and the future of the sector.</p></article><article><span>02</span><BarChart3/><h3>Panel session</h3><p>Direct insight from leaders working across finance, trade, mining and enterprise.</p></article><article><span>03</span><Sparkles/><h3>Fireside chat</h3><p>A candid conversation on capital, risk, value creation and responsible growth.</p></article><article><span>04</span><Globe2/><h3>Networking</h3><p>Purposeful introductions in an executive setting designed for meaningful exchange.</p></article></section>
+
+      <section className="investment-audience" aria-labelledby="audience-title"><div className="audience-heading"><span className="kicker light">DESIGNED FOR DECISION-MAKERS</span><h2 id="audience-title">The people who move <em>capital and markets.</em></h2><p>A curated room for senior leaders evaluating risk, opportunity and long-term value in Africa’s mineral economy.</p></div><div className="audience-list">{INVESTMENT_AUDIENCE.map((item,index)=><article key={item}><span>0{index+1}</span><BadgeCheck/><h3>{item}</h3></article>)}</div></section>
+
+      <section className="investment-thesis"><div><span className="kicker">THE INVESTMENT CONVERSATION</span><h2>From mineral wealth to <em>bankable value.</em></h2><p>The forum brings finance and industry into one practical conversation—connecting capital allocation with credible operators, responsible growth and market-ready opportunities.</p></div><div className="thesis-grid"><article><strong>Capital</strong><p>Explore structures, partnerships and pathways that can unlock investment.</p></article><article><strong>Risk</strong><p>Understand the governance, market and operating considerations shaping decisions.</p></article><article><strong>Value</strong><p>Identify opportunities across processing, manufacturing, trade and export.</p></article></div></section>
+
       <section className="investment-contact"><div><span className="kicker light">FORUM ENQUIRIES</span><h2>Connect with the GGCE team.</h2></div><p><a href="tel:+2348064885338">+234 806 488 5338</a><a href="tel:+2348035457443">+234 803 545 7443</a><a href="mailto:ggcelagos@gmail.com">ggcelagos@gmail.com</a></p></section>
     </main>
     <footer><Logo href="/#investments"/><p>Gold & Gemstones Conference & Exhibition.</p><div><a href="/">Main conference</a><a href="/legal">Legal</a><a href="/legal/privacy">Privacy</a><a href="mailto:ggcelagos@gmail.com">Contact</a><span>© 2026 GGCE</span></div></footer><CookieConsent/>
