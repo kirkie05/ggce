@@ -16,6 +16,14 @@ export async function createRegistration(payload) {
   saveLocal([entry, ...localRows()]); return entry
 }
 
+export async function createInvestmentRegistration(payload) {
+  if (functions) return (await httpsCallable(functions, 'registerInvestmentForum')(payload)).data
+  if (!devFallback) throw new Error('Investment Forum registration is not configured.')
+  const id = `GGCE26-${crypto.randomUUID().replaceAll('-', '').slice(0, 14).toUpperCase()}`
+  const entry = { ...payload, id, passId: 'investment', passName: 'Investment Forum Invitation', amount: 0, status: 'valid', createdAt: new Date().toISOString() }
+  saveLocal([entry, ...localRows()]); return entry
+}
+
 export async function listRegistrations() {
   if (functions) return (await httpsCallable(functions, 'adminListRegistrations')({})).data.registrations
   if (!devFallback) throw new Error('Admin service is not configured.')

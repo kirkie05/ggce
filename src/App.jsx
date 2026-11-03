@@ -5,7 +5,7 @@ import {
   getMultiFactorResolver, multiFactor, onAuthStateChanged, signInWithEmailAndPassword, signOut,
   TotpMultiFactorGenerator,
 } from 'firebase/auth'
-import { approveRegistration, auth, createRegistration, getAdminAnalytics, listRegistrations, markTicketUsed, revokeTicket, updateRegistration, useLocalDevelopmentBackend, verifyRegistration } from './registrationService'
+import { approveRegistration, auth, createInvestmentRegistration, createRegistration, getAdminAnalytics, listRegistrations, markTicketUsed, revokeTicket, updateRegistration, useLocalDevelopmentBackend, verifyRegistration } from './registrationService'
 import { analyticsContext, trackJourney } from './analytics'
 import { metaCustomEvent, metaEvent, newEventId } from './meta'
 import CookieConsent, { privacySettingsEvent } from './CookieConsent'
@@ -41,8 +41,8 @@ const initialForm = { firstName: '', lastName: '', email: '', phone: '', organis
 const adminSessionKey = 'ggce-admin-session'
 const requireAdminMfa = import.meta.env.VITE_REQUIRE_ADMIN_MFA === 'true'
 
-function Logo() {
-  return <a className="brand" href="#top" aria-label="GGCE home"><img src="/Logo.png" alt="Gold & Gemstones Conference & Exhibition (GGCE)"/></a>
+function Logo({ href = '#top' }) {
+  return <a className="brand" href={href} aria-label="GGCE home"><img src="/Logo.png" alt="Gold & Gemstones Conference & Exhibition (GGCE)"/></a>
 }
 
 const funnelLabels = { page_view: 'Opened site', registration_view: 'Viewed registration', pass_selected: 'Selected pass', form_started: 'Started details', details_completed: 'Completed details', registration_completed: 'Registered' }
@@ -215,9 +215,91 @@ function AdminDashboard() {
   </main>
 }
 
+const investmentFormInitial = { firstName:'', lastName:'', email:'', phone:'', organisation:'', role:'', country:'Nigeria', professionalCategory:'', consent:false, marketingConsent:false }
+
+function InvestmentForumLanding() {
+  const [form, setForm] = useState(investmentFormInitial)
+  const [errors, setErrors] = useState({})
+  const [submitting, setSubmitting] = useState(false)
+  const [confirmation, setConfirmation] = useState(null)
+  const { scrollY } = useScroll()
+  const heroScale = useTransform(scrollY, [0, 700], [1, 1.08])
+  const heroOpacity = useTransform(scrollY, [0, 620], [1, .28])
+  const update = (key, value) => { setForm(current => ({ ...current, [key]:value })); setErrors(current => ({ ...current, [key]:'' })) }
+  const scrollToForm = event => { event?.preventDefault(); document.getElementById('investment-register')?.scrollIntoView({ behavior:'smooth', block:'start' }) }
+
+  async function submit(event) {
+    event.preventDefault()
+    const nextErrors = {}
+    if (!form.firstName.trim()) nextErrors.firstName = 'Enter your first name.'
+    if (!form.lastName.trim()) nextErrors.lastName = 'Enter your last name.'
+    if (!/^\S+@\S+\.\S+$/.test(form.email)) nextErrors.email = 'Enter a valid email address.'
+    if (!/^\+?[0-9][0-9\s()-]{7,}$/.test(form.phone)) nextErrors.phone = 'Include a valid phone number with country code.'
+    if (!form.professionalCategory) nextErrors.professionalCategory = 'Select your professional category.'
+    if (!form.consent) nextErrors.consent = 'Please accept the registration terms.'
+    if (Object.keys(nextErrors).length) return setErrors(nextErrors)
+    setSubmitting(true)
+    try {
+      const entry = await createInvestmentRegistration({ ...form, ...analyticsContext(), interests:['Investment Forum'], eventId:newEventId('investment-forum') })
+      setConfirmation(entry)
+      trackJourney('registration_completed', { passId:'investment' })
+      requestAnimationFrame(() => document.getElementById('investment-register')?.scrollIntoView({ behavior:'smooth', block:'start' }))
+    } catch (error) { setErrors({ submit:error.message || 'Registration could not be completed. Please try again.' }) }
+    finally { setSubmitting(false) }
+  }
+
+  function addForumCalendar() {
+    const details = encodeURIComponent(`GGCE Investment Forum. Registration reference: ${confirmation?.id || ''}`)
+    open(`https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent('GGCE Investment Forum')}&dates=20261125T150000Z/20261125T180000Z&details=${details}&location=${encodeURIComponent('Ballroom, Lagos Oriental Hotel, Lekki')}`,'_blank','noopener')
+  }
+
+  return <div className="investment-page">
+    <header className="nav investment-nav"><Logo href="/#investments"/><nav><a href="#forum" onClick={e=>{e.preventDefault();document.getElementById('forum')?.scrollIntoView({behavior:'smooth'})}}>Forum</a><a href="#programme" onClick={e=>{e.preventDefault();document.getElementById('programme')?.scrollIntoView({behavior:'smooth'})}}>Programme</a></nav><a className="nav-cta" href="#investment-register" onClick={scrollToForm}>Request an invitation</a></header>
+    <main>
+      <section className="hero cinematic-hero investment-hero" id="forum">
+        <motion.div className="hero-media" style={{scale:heroScale}}><video autoPlay muted loop playsInline preload="metadata"><source src="/vid1.mp4" type="video/mp4"/></video></motion.div>
+        <div className="hero-shade"/><div className="hero-frame"/>
+        <motion.div className="hero-copy" style={{opacity:heroOpacity}} initial={{opacity:0,y:34}} animate={{opacity:1,y:0}} transition={{duration:.9}}>
+          <div className="eyebrow"><span/> GGCE 2026 · INVESTMENT FORUM</div>
+          <h1>Unlocking capital. Creating value. <em>Investing in Africa’s gold & gemstone industry.</em></h1>
+          <p className="lead">An executive investment forum, private viewing and networking session for decision-makers shaping responsible growth.</p>
+          <div className="invitation-badge"><ShieldCheck/> Strictly by invitation</div>
+          <div className="hero-actions"><a className="primary" href="#investment-register" onClick={scrollToForm}>Request your invitation <ArrowRight size={18}/></a><a className="text-link" href="#programme" onClick={e=>{e.preventDefault();document.getElementById('programme')?.scrollIntoView({behavior:'smooth'})}}>Explore the forum <span>↓</span></a></div>
+        </motion.div>
+        <motion.div className="hero-details" initial={{opacity:0}} animate={{opacity:1}} transition={{delay:.7,duration:.8}}><span><CalendarDays/> Wednesday, 25 November 2026</span><span><Clock3/> 4:00 PM</span><span><MapPin/> Lagos Oriental Hotel, Lekki</span></motion.div>
+        <div className="scroll-mark"><span>SCROLL TO EXPLORE</span><i/></div>
+      </section>
+
+      <section className="investment-intro" id="programme"><div><span className="kicker">EXECUTIVE FORUM</span><h2>Where capital meets <em>credible opportunity.</em></h2></div><p>Join investors, operators, policy leaders and industry stakeholders for a focused conversation on unlocking value across Africa’s gold and gemstone economy.</p></section>
+      <section className="investment-features" aria-label="Forum programme"><article><span>01</span><Users/><h3>Keynote</h3><p>Strategic perspectives on investment, market development and the future of the sector.</p></article><article><span>02</span><BarChart3/><h3>Panel session</h3><p>Direct insight from leaders working across finance, trade, mining and enterprise.</p></article><article><span>03</span><Sparkles/><h3>Fireside chat</h3><p>A candid conversation on capital, risk, value creation and responsible growth.</p></article><article><span>04</span><Globe2/><h3>Networking</h3><p>Purposeful introductions in an executive setting designed for meaningful exchange.</p></article></section>
+
+      <section className="investment-register" id="investment-register">
+        <motion.div className="investment-poster" initial={{opacity:0,x:-30}} whileInView={{opacity:1,x:0}} viewport={{once:true,amount:.15}}><img src="/Gold%20and%20Gemstone%20Investment%20Forum.png" alt="GGCE Investment Forum — Wednesday 25 November 2026 at Lagos Oriental Hotel"/></motion.div>
+        <motion.div className="investment-form-card" initial={{opacity:0,y:30}} whileInView={{opacity:1,y:0}} viewport={{once:true,amount:.15}}>
+          {!confirmation ? <form onSubmit={submit}><span className="kicker">INVITATION REGISTRATION</span><h2>Register your interest.</h2><p>Complete your details to receive your forum confirmation and event reference.</p>
+            <div className="grid two"><label>First name *<input value={form.firstName} onChange={e=>update('firstName',e.target.value)} aria-invalid={Boolean(errors.firstName)}/>{errors.firstName&&<small className="field-error">{errors.firstName}</small>}</label><label>Last name *<input value={form.lastName} onChange={e=>update('lastName',e.target.value)} aria-invalid={Boolean(errors.lastName)}/>{errors.lastName&&<small className="field-error">{errors.lastName}</small>}</label></div>
+            <label>Email address *<input type="email" value={form.email} onChange={e=>update('email',e.target.value)} aria-invalid={Boolean(errors.email)}/>{errors.email?<small className="field-error">{errors.email}</small>:<small>Your confirmation will be sent here.</small>}</label>
+            <div className="grid two"><label>Phone with country code *<input value={form.phone} onChange={e=>update('phone',e.target.value)} placeholder="+234 800 000 0000" aria-invalid={Boolean(errors.phone)}/>{errors.phone&&<small className="field-error">{errors.phone}</small>}</label><label>Country<input value={form.country} onChange={e=>update('country',e.target.value)}/></label></div>
+            <div className="grid two"><label>Organisation or business<input value={form.organisation} onChange={e=>update('organisation',e.target.value)}/></label><label>Job title<input value={form.role} onChange={e=>update('role',e.target.value)}/></label></div>
+            <label>Professional category *<div className="select-wrap"><select value={form.professionalCategory} onChange={e=>update('professionalCategory',e.target.value)} aria-invalid={Boolean(errors.professionalCategory)}><option value="">Select category</option>{PROFESSIONAL_CATEGORIES.map(item=><option key={item}>{item}</option>)}</select><ChevronDown/></div>{errors.professionalCategory&&<small className="field-error">{errors.professionalCategory}</small>}</label>
+            <label className="check"><input type="checkbox" checked={form.consent} onChange={e=>update('consent',e.target.checked)}/><span>{form.consent&&<Check/>}</span>I agree to essential registration communications and acknowledge the <a href="/legal/privacy" target="_blank">Privacy Notice</a> and <a href="/legal/event" target="_blank">Event Terms</a>.</label>{errors.consent&&<small className="field-error">{errors.consent}</small>}
+            <label className="check optional-consent"><input type="checkbox" checked={form.marketingConsent} onChange={e=>update('marketingConsent',e.target.checked)}/><span>{form.marketingConsent&&<Check/>}</span>Send me optional GGCE news and future event updates.</label>
+            {errors.submit&&<p className="form-error" role="alert">{errors.submit}</p>}<button className="investment-submit" disabled={submitting}>{submitting?'Submitting securely…':'Complete registration'} <ArrowRight/></button><div className="secure"><ShieldCheck/> Your details are encrypted and never shared.</div>
+          </form> : <div className="investment-success"><BadgeCheck/><span className="kicker">REGISTRATION CONFIRMED</span><h2>Your place at the forum is confirmed.</h2><p>We have sent the event details to <b>{confirmation.email}</b>. Keep this reference for your records.</p><div><small>REGISTRATION REFERENCE</small><strong>{confirmation.id}</strong></div><button onClick={addForumCalendar}><CalendarDays/> Add to calendar</button></div>}
+        </motion.div>
+      </section>
+      <section className="investment-contact"><div><span className="kicker light">FORUM ENQUIRIES</span><h2>Connect with the GGCE team.</h2></div><p><a href="tel:+2348064885338">+234 806 488 5338</a><a href="tel:+2348035457443">+234 803 545 7443</a><a href="mailto:ggcelagos@gmail.com">ggcelagos@gmail.com</a></p></section>
+    </main>
+    <footer><Logo href="/#investments"/><p>Gold & Gemstones Conference & Exhibition.</p><div><a href="/">Main conference</a><a href="/legal">Legal</a><a href="/legal/privacy">Privacy</a><a href="mailto:ggcelagos@gmail.com">Contact</a><span>© 2026 GGCE</span></div></footer><CookieConsent/>
+  </div>
+}
+
 function App() {
+  const [routeHash, setRouteHash] = useState(location.hash)
+  useEffect(() => { const updateRoute = () => setRouteHash(location.hash); addEventListener('hashchange', updateRoute); return () => removeEventListener('hashchange', updateRoute) }, [])
   if (location.pathname.startsWith('/legal')) return <LegalCentre />
   if (location.pathname.startsWith('/admin')) return <AdminDashboard />
+  if (routeHash === '#investments') return <InvestmentForumLanding />
   const campaignPage = CAMPAIGNS[location.pathname]
   const [form, setForm] = useState(() => ({ ...initialForm, pass: campaignPage?.pass || 'general' }))
   const [step, setStep] = useState(1)
@@ -354,7 +436,7 @@ function App() {
 
   return <>
     <header className="nav"><Logo/><nav className={menuOpen ? 'open' : ''}>
-      <a href="#experience">Experience</a><a href="#book">Free book</a><a href="#passes">Passes</a><a href="#verify">Verify ticket</a><a href="#faq">FAQ</a>
+      <a href="#experience">Experience</a><a href="/#investments">Investment Forum</a><a href="#book">Free book</a><a href="#passes">Passes</a><a href="#verify">Verify ticket</a><a href="#faq">FAQ</a>
     </nav><div className="nav-actions"><a className="nav-cta" href="#register" onClick={openRegistration}>Register now</a><button className="menu" aria-label={menuOpen ? 'Close navigation' : 'Open navigation'} aria-expanded={menuOpen} onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? <X/> : <Menu/>}</button></div>
     </header>
 
