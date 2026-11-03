@@ -305,12 +305,7 @@ function InvestmentForumLanding() {
   </div>
 }
 
-function App() {
-  const [routeHash, setRouteHash] = useState(location.hash)
-  useEffect(() => { const updateRoute = () => setRouteHash(location.hash); addEventListener('hashchange', updateRoute); return () => removeEventListener('hashchange', updateRoute) }, [])
-  if (location.pathname.startsWith('/legal')) return <LegalCentre />
-  if (location.pathname.startsWith('/admin')) return <AdminDashboard />
-  if (routeHash === '#investments') return <InvestmentForumLanding />
+function MainConference() {
   const campaignPage = CAMPAIGNS[location.pathname]
   const [form, setForm] = useState(() => ({ ...initialForm, pass: campaignPage?.pass || 'general' }))
   const [step, setStep] = useState(1)
@@ -550,6 +545,19 @@ function App() {
     <a className="mobile-register" href="#register" onClick={openRegistration}>Register for GGCE 2026 <ArrowRight/></a>
     <CookieConsent/>
   </>
+}
+
+function App() {
+  const [routeHash, setRouteHash] = useState(location.hash)
+  useEffect(() => {
+    const updateRoute = () => setRouteHash(location.hash)
+    addEventListener('hashchange', updateRoute)
+    return () => removeEventListener('hashchange', updateRoute)
+  }, [])
+  if (location.pathname.startsWith('/legal')) return <LegalCentre />
+  if (location.pathname.startsWith('/admin')) return <AdminDashboard />
+  if (routeHash === '#investments') return <InvestmentForumLanding />
+  return <MainConference />
 }
 
 export default App
