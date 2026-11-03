@@ -26,7 +26,7 @@ const PASSES = [
 ]
 
 const PROFESSIONAL_CATEGORIES = ['Student / Job Seeker','Entrepreneur','Jewelry Designer','Gemstone Trader','Gold Dealer','Miner','Manufacturer','Retailer','Investor','Industry Professional','Other']
-const INVESTMENT_AUDIENCE = ['Investment company CEO / senior executive','Risk management executive','Corporate banking executive','Capital & asset management executive','Investment banking executive']
+const INVESTMENT_AUDIENCE = ['Gemstone Trader','Gold Dealer','Miner','Manufacturer','Retailer','Investor','Industry Professional','Other','Investment company CEO / senior executive','Risk management executive','Corporate banking executive','Capital & asset management executive','Investment banking executive']
 const EVENT_INTERESTS = ['General Exhibition Attendance','Conference','Masterclasses','Investment Forum','Jewelry Design Competition','Gala Night']
 const PASS_INTEREST = { general:'General Exhibition Attendance', delegate:'Conference', vip:'Conference', gala:'Gala Night', 'gala-standard-table':'Gala Night', 'gala-premium-table':'Gala Night' }
 const LEAD_STATUSES = ['New','Contacted','Qualified','Follow-up Required','Payment Pending','Payment Confirmed','Closed / Not Interested']
