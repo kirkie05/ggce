@@ -90,6 +90,9 @@ exports.registerInvestmentForum = onCall({ region, invoker:'public', enforceAppC
   const id = newRegistrationId()
   const registrationRef = db.collection('registrations').doc(id)
   const ticketRef = db.collection('tickets').doc(id)
+  const contactId = validRegistrationId(data.contactId)
+  const contactRef = contactId ? db.collection('registrationLeads').doc(contactId) : null
+  const contactHash = crypto.createHash('sha256').update(cleanText(data.contactToken, 80)).digest('hex')
   const createdAt = new Date().toISOString()
   const registration = {
     id, firstName, lastName, email, phone,
@@ -101,8 +104,11 @@ exports.registerInvestmentForum = onCall({ region, invoker:'public', enforceAppC
   }
   await db.runTransaction(async transaction => {
     const [emailMatch, phoneMatch] = await Promise.all([transaction.get(emailLookup), transaction.get(phoneLookup)])
+    const contact = contactRef ? await transaction.get(contactRef) : null
+    if (contactRef && (!contact.exists || contact.data().tokenHash !== contactHash || contact.data().email !== email)) throw new HttpsError('permission-denied', 'Save your contact details again before registering.')
     if (emailMatch.exists || phoneMatch.exists) throw new HttpsError('already-exists', 'A registration already exists for this email address or phone number.')
     transaction.create(registrationRef, registration)
+    if (contactRef) transaction.update(contactRef, { status:'completed', registrationId:id, updatedAt:FieldValue.serverTimestamp() })
     transaction.create(ticketRef, { registrationId:id, status:'valid', passId:'investment', createdAt:FieldValue.serverTimestamp(), updatedAt:FieldValue.serverTimestamp() })
     transaction.create(emailLookup, { registrationId:id, type:'email', createdAt:FieldValue.serverTimestamp() })
     transaction.create(phoneLookup, { registrationId:id, type:'phone', createdAt:FieldValue.serverTimestamp() })

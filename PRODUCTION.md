@@ -85,3 +85,56 @@ the published privacy notice before launch.
 ## Secrets
 
 Never commit `.env.local`, service-account JSON, Resend keys or Firebase Admin credentials. Firebase Web App configuration is public by design; security depends on App Check, Authentication, callable-function authorization and Firestore rules.
+
+## Contact-first registration and special attendees
+
+All registration routes collect first name, last name, email and phone before
+showing ticket choices. **Next** saves a separate `registrationLeads` record;
+this is not a completed registration and does not issue a ticket. The admin
+registration desk lists these contacts and exports them as CSV, including
+people who leave before selecting attendance. Completion links the contact to
+its final registration. Contact records expire after 90 days and a daily
+scheduled function removes them.
+
+The unlisted route `/special-attendees/rccg` is for RCCG youth. It offers free
+general admission or a sponsored masterclass. It has no public navigation link
+and sends `noindex, nofollow, noarchive`; anyone with the URL can open it.
+Sponsored pricing is set on the server and does not grant VIP or conference
+access.
+
+Deploy the Firebase backend **before** merging the frontend to `main`, because
+`main` automatically deploys to Vercel. From the repository root, with Node 22
+and authenticated access to `ggce-registration-c2d25`:
+
+```bash
+firebase deploy --project ggce-registration-c2d25 --only functions:default,functions:books,firestore:rules
+```
+
+Keep existing Firebase secrets and runtime parameters. The backend must include
+`saveRegistrationContact`, `adminListRegistrationContacts`,
+`purgeExpiredRegistrationContacts`, the updated `createRegistration`, and the
+updated `registerInvestmentForum`. Verify the new contact-saving callable using
+a valid App Check token before merging. Existing clients remain compatible
+while the backend rolls out. Then merge the frontend change into `main`, wait
+for Vercel to finish, and smoke-test both the main and RCCG routes on the live
+site. Check that a first-step contact appears in the admin dashboard before
+completing registration, that free/sponsored attendance issues a valid pass,
+and that paid attendance issues only a pending reservation.
+
+Local validation uses Node 24 for the frontend and Node 22 for Functions:
+
+```bash
+npm ci
+npm run build
+npm run test:e2e
+(cd functions && npm ci && npm run lint && npm test)
+(cd functions-book && npm ci && npm run lint && npm test)
+```
+
+Playwright starts the local app by default. Install its Chromium browser with
+`npx playwright install chromium`, or set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to an
+existing Chromium executable (for example `/usr/bin/chromium` in Codex Cloud).
+The browser tests use the local development backend; callable unit tests cover
+server-side contact ownership, administrator access, duplicate prevention and
+server-defined sponsored pricing. They do not validate production email delivery
+or Firebase/App Check configuration.

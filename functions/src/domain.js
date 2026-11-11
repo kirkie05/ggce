@@ -25,4 +25,19 @@ function ticketReference(value) {
 }
 function statusForPass(passId) { return passes[passId]?.price === 0 ? 'valid' : passes[passId] ? 'pending' : null }
 
-module.exports = { escapeHtml, lookupKey, normalizeEmail, normalizePhone, passes, statusForPass, text, ticketId, ticketReference }
+function registrationPass(passId, audience) {
+  if (audience === 'rccg') {
+    if (passId === 'rccg-masterclass') return { name: 'RCCG Sponsored Masterclass', price: 0 }
+    return passId === 'general' ? passes.general : null
+  }
+  return Object.hasOwn(passes, passId) ? passes[passId] : null
+}
+
+function contactDetails(data = {}) {
+  const firstName = text(data.firstName, 60), lastName = text(data.lastName, 60)
+  const email = normalizeEmail(data.email), phone = normalizePhone(data.phone)
+  if (!firstName || !lastName || !/^\S+@\S+\.\S+$/.test(email) || !/^\+?\d{8,15}$/.test(phone)) return null
+  return { firstName, lastName, email, phone }
+}
+
+module.exports = { contactDetails, registrationPass, escapeHtml, lookupKey, normalizeEmail, normalizePhone, passes, statusForPass, text, ticketId, ticketReference }

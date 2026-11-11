@@ -5,7 +5,7 @@ import {
   getMultiFactorResolver, multiFactor, onAuthStateChanged, signInWithEmailAndPassword, signOut,
   TotpMultiFactorGenerator,
 } from 'firebase/auth'
-import { approveRegistration, auth, createInvestmentRegistration, createRegistration, getAdminAnalytics, listRegistrations, markTicketUsed, revokeTicket, updateRegistration, useLocalDevelopmentBackend, verifyRegistration } from './registrationService'
+import { approveRegistration, auth, newContactSession, saveRegistrationContact, listRegistrationContacts, createInvestmentRegistration, createRegistration, getAdminAnalytics, listRegistrations, markTicketUsed, revokeTicket, updateRegistration, useLocalDevelopmentBackend, verifyRegistration } from './registrationService'
 import { analyticsContext, trackJourney } from './analytics'
 import { metaCustomEvent, metaEvent, newEventId } from './meta'
 import CookieConsent, { privacySettingsEvent } from './CookieConsent'
@@ -25,10 +25,36 @@ const PASSES = [
   { id: 'gala-premium-table', name: 'Gala Table · Premium', price: '₦1,500,000', note: 'One premium table · 10 guests', accent: 'Premium group', features: ['10 premium guest seats','Priority table placement','Premium gala experience'] }
 ]
 
+const RCCG_PASSES = [
+  { ...PASSES[0], note: 'Explore the exhibition and meet the industry' },
+  { id: 'rccg-masterclass', name: 'Sponsored Masterclass', price: 'Free · Sponsored', note: 'A sponsored learning opportunity for RCCG young people', accent: 'Sponsored', features: ['Masterclass access', 'Practical industry learning', 'Exhibition access'] },
+]
+
+function ContactFields({ form, update, errors }) {
+  return <>
+    <div className="grid two">{[['firstName', 'First name', 'given-name'], ['lastName', 'Last name', 'family-name']].map(([key, label, autoComplete]) => <label key={key}>{label} *<input required autoComplete={autoComplete} value={form[key]} onChange={e => update(key, e.target.value)} aria-invalid={Boolean(errors[key])}/>{errors[key] && <small className="field-error">{errors[key]}</small>}</label>)}</div>
+    <label>Email address *<input type="email" required autoComplete="email" value={form.email} onChange={e => update('email', e.target.value)} aria-invalid={Boolean(errors.email)}/>{errors.email && <small className="field-error">{errors.email}</small>}</label>
+    <label>Phone with country code *<input type="tel" required autoComplete="tel" value={form.phone} onChange={e => update('phone', e.target.value)} placeholder="+234 800 000 0000" aria-invalid={Boolean(errors.phone)}/>{errors.phone && <small className="field-error">{errors.phone}</small>}</label>
+  </>
+}
+
+function contactErrors(form) {
+  const errors = {}
+  if (!form.firstName.trim()) errors.firstName = 'Enter your first name.'
+  if (!form.lastName.trim()) errors.lastName = 'Enter your last name.'
+  if (!/^\S+@\S+\.\S+$/.test(form.email.trim())) errors.email = 'Enter a valid email address.'
+  if (!/^\+?\d{8,15}$/.test(form.phone.replace(/[\s()-]/g, ''))) errors.phone = 'Include a valid phone number with country code.'
+  return errors
+}
+
+function ContactNotice() {
+  return <p className="contact-notice">When you select Next, we save your contact details so the GGCE team can help you complete registration. You can choose your attendance on the next screen. <a href="/legal/privacy" target="_blank" rel="noreferrer">Privacy Notice</a></p>
+}
+
 const PROFESSIONAL_CATEGORIES = ['Student / Job Seeker','Entrepreneur','Jewelry Designer','Gemstone Trader','Gold Dealer','Miner','Manufacturer','Retailer','Investor','Industry Professional','Other']
 const INVESTMENT_AUDIENCE = ['Gemstone Trader','Gold Dealer','Miner','Manufacturer','Retailer','Investor','Industry Professional','Other','Investment company CEO / senior executive','Risk management executive','Corporate banking executive','Capital & asset management executive','Investment banking executive']
 const EVENT_INTERESTS = ['General Exhibition Attendance','Conference','Masterclasses','Investment Forum','Jewelry Design Competition','Gala Night']
-const PASS_INTEREST = { general:'General Exhibition Attendance', delegate:'Conference', vip:'Conference', gala:'Gala Night', 'gala-standard-table':'Gala Night', 'gala-premium-table':'Gala Night' }
+const PASS_INTEREST = { 'rccg-masterclass': 'Masterclasses', general:'General Exhibition Attendance', delegate:'Conference', vip:'Conference', gala:'Gala Night', 'gala-standard-table':'Gala Night', 'gala-premium-table':'Gala Night' }
 const LEAD_STATUSES = ['New','Contacted','Qualified','Follow-up Required','Payment Pending','Payment Confirmed','Closed / Not Interested']
 const EXPERIENCES = [
   ['Exhibition','Products, businesses and opportunities across the value chain.','general'],['Conference','Industry conversations, plenaries and professional networking.','delegate'],['Masterclasses','Practical learning opportunities led by industry professionals.','delegate'],['Investment Forum','Meet stakeholders exploring trade, finance and responsible growth.','delegate'],['Jewelry Design Competition','Discover African design talent and exceptional craft.','general'],['Awards & Gala Night','A premium evening experience with awards and showcases.','gala'],
@@ -46,7 +72,7 @@ function Logo({ href = '#top' }) {
   return <a className="brand" href={href} aria-label="GGCE home"><img src="/Logo.png" alt="Gold & Gemstones Conference & Exhibition (GGCE)"/></a>
 }
 
-const funnelLabels = { page_view: 'Opened site', registration_view: 'Viewed registration', pass_selected: 'Selected pass', form_started: 'Started details', details_completed: 'Completed details', registration_completed: 'Registered' }
+const funnelLabels = { page_view: 'Opened site', registration_view: 'Viewed registration', form_started: 'Started details', details_completed: 'Saved contact details', pass_selected: 'Selected pass', registration_completed: 'Registered' }
 
 function Breakdown({ title, rows = [] }) {
   const max = Math.max(...rows.map(row => row.value), 1)
@@ -70,6 +96,7 @@ function AdminDashboard() {
   const [adminEmail, setAdminEmail] = useState('')
   const [pin, setPin] = useState('')
   const [rows, setRows] = useState([])
+  const [contacts, setContacts] = useState([])
   const [search, setSearch] = useState('')
   const [scanValue, setScanValue] = useState('')
   const [scanResult, setScanResult] = useState(undefined)
@@ -86,7 +113,7 @@ function AdminDashboard() {
   const videoRef = useRef(null)
   const streamRef = useRef(null)
 
-  const refresh = async () => { try { setRows(await listRegistrations()) } catch (error) { setAdminError(error.message) } }
+  const refresh = async () => { try { const [registrations, savedContacts] = await Promise.all([listRegistrations(), listRegistrationContacts()]); setRows(registrations); setContacts(savedContacts) } catch (error) { setAdminError(error.message) } }
   const refreshAnalytics = async () => { try { setAnalytics(await getAdminAnalytics(analyticsDays)) } catch (error) { setAdminError(error.message) } }
   const filtered = rows.filter(r => `${r.firstName} ${r.lastName} ${r.email} ${r.id} ${r.passName}`.toLowerCase().includes(search.toLowerCase()))
 
@@ -210,6 +237,10 @@ function AdminDashboard() {
     <section className="admin-main"><header><div><span>GGCE 2026</span><h1>Registration desk</h1></div><button onClick={exportRegistrations}><FileSpreadsheet/> Export CSV</button></header>
       {adminError && <div className="admin-alert">{adminError}</div>}<div className="admin-stats"><article><span>Total registrations</span><strong>{rows.length}</strong></article><article><span>Valid tickets</span><strong>{rows.filter(r=>r.status==='valid').length}</strong></article><article><span>Awaiting payment</span><strong>{rows.filter(r=>r.status==='pending').length}</strong></article></div>
       <AnalyticsPanel data={analytics} days={analyticsDays} setDays={setAnalyticsDays}/>
+      <section className="admin-panel" id="contacts"><div className="panel-head"><div><h2>Saved contact details</h2><p>People who completed the first step, including those who have not selected attendance.</p></div><button onClick={() => {
+        const csv = [['First name','Last name','Email','Phone','Audience','Flow','Status','Created'], ...contacts.map(row => [row.firstName,row.lastName,row.email,row.phone,row.audience,row.registrationFlow,row.status,row.createdAt])].map(row => row.map(value => `"${String(value || '').replace(/^[=+@-]/, "'$&").replaceAll('"', '""')}"`).join(',')).join('\r\n')
+        const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); const link = document.createElement('a'); link.href = url; link.download = 'ggce-contact-leads.csv'; link.click(); URL.revokeObjectURL(url)
+      }}>Export contacts</button></div><div className="admin-table">{contacts.map(row => <div className="table-row" key={row.id}><span><b>{row.firstName} {row.lastName}</b><small>{row.email}</small></span><span>{row.phone}</span><span>{row.audience === 'rccg' ? 'RCCG youth' : row.registrationFlow === 'investment' ? 'Investment Forum' : 'Main event'}</span><span>{row.status === 'completed' ? 'Registered' : 'Contact saved'}</span><span>{row.createdAt ? new Date(row.createdAt).toLocaleDateString() : ''}</span></div>)}{!contacts.length && <p>No contact details saved yet.</p>}</div></section>
       <section className="admin-panel" id="registrations"><div className="panel-head"><div><h2>Attendees and leads</h2><p>Manage registration, payment and follow-up status.</p></div><label><Search/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search attendees"/></label></div><div className="admin-table"><div className="table-row table-labels"><span>Attendee</span><span>Pass</span><span>Reference</span><span>Status</span><span>Action</span></div>{filtered.map(r=><div className="table-row" key={r.id}><span><b>{r.firstName} {r.lastName}</b><small>{r.email} · {r.professionalCategory || 'Category not set'}</small></span><span>{r.passName}<small className="lead-state">{r.leadStatus || 'New'}</small></span><code>{r.id}</code><span className={`status-pill ${r.status}`}>{r.status === 'valid' ? 'Valid' : r.status === 'pending' ? 'Awaiting payment' : r.status === 'used' ? 'Checked in' : r.status === 'revoked' ? 'Revoked' : 'Invalid'}</span><span className="row-actions"><button onClick={()=>manageLead(r)}>Manage</button>{r.status === 'pending' ? <button onClick={()=>approve(r.id)}>Mark paid</button> : r.status === 'revoked' ? <X aria-label="Revoked"/> : revokeTarget === r.id ? <button className="danger" onClick={()=>revoke(r.id)}>Confirm revoke</button> : <button className="danger ghost" onClick={()=>setRevokeTarget(r.id)}>Revoke</button>}</span></div>)}{!filtered.length&&<div className="empty-table">No registrations found.</div>}</div></section>
       <section className="scanner-panel" id="scanner"><div><span className="kicker">ENTRY VALIDATION</span><h2>Scan and verify tickets.</h2><p>Use the device camera or enter a ticket reference manually.</p>{!cameraOn ? <button className="camera-button" onClick={startScanner}><Camera/> Open QR scanner</button> : <button className="camera-button stop" onClick={stopScanner}>Stop camera</button>}</div><div className="scanner-box"><video ref={videoRef} className={cameraOn?'on':''} muted playsInline/><div className="manual-scan"><input value={scanValue} onChange={e=>setScanValue(e.target.value)} placeholder="GGCE26-A1B2C3"/><button onClick={()=>verifyScan()}><QrCode/> Verify</button></div>{scanResult !== undefined && <div className={`scan-result ${scanResult?.status || 'invalid'}`}>{scanResult ? <><BadgeCheck/><span><b>{scanResult.status === 'valid' ? 'Valid ticket' : scanResult.status === 'used' ? 'Already checked in' : scanResult.status === 'revoked' ? 'Revoked ticket' : 'Payment pending'}</b>{scanResult.firstName} {scanResult.lastName} · {scanResult.passName}</span>{scanResult.status === 'valid' && <button onClick={checkIn}>Check in attendee</button>}</> : <><X/><span><b>Ticket not found</b>Check the reference and try again.</span></>}</div>}</div></section>
     </section>
@@ -219,6 +250,9 @@ function AdminDashboard() {
 const investmentFormInitial = { firstName:'', lastName:'', email:'', phone:'', organisation:'', role:'', country:'Nigeria', professionalCategory:'', consent:false, marketingConsent:false }
 
 function InvestmentForumLanding() {
+  const [step, setStep] = useState(1)
+  const [contactSession] = useState(newContactSession)
+  const [attendance, setAttendance] = useState('investment')
   const [form, setForm] = useState(investmentFormInitial)
   const [errors, setErrors] = useState({})
   const [submitting, setSubmitting] = useState(false)
@@ -234,6 +268,18 @@ function InvestmentForumLanding() {
     return () => cancelAnimationFrame(frame)
   }, [])
 
+  async function saveContact(event) {
+    event.preventDefault()
+    const validation = contactErrors(form)
+    if (Object.keys(validation).length) return setErrors(validation)
+    setSubmitting(true); setErrors({})
+    try {
+      await saveRegistrationContact({ ...contactSession, firstName: form.firstName, lastName: form.lastName, email: form.email, phone: form.phone, ...analyticsContext(), registrationFlow: 'investment', landingPage: '/#investments' })
+      setStep(2)
+    } catch (error) { setErrors({ submit: error.message || 'Your details could not be saved. Please try again.' }) }
+    finally { setSubmitting(false) }
+  }
+
   async function submit(event) {
     event.preventDefault()
     const nextErrors = {}
@@ -246,9 +292,10 @@ function InvestmentForumLanding() {
     if (Object.keys(nextErrors).length) return setErrors(nextErrors)
     setSubmitting(true)
     try {
-      const entry = await createInvestmentRegistration({ ...form, ...analyticsContext(), interests:['Investment Forum'], eventId:newEventId('investment-forum') })
+      const payload = { ...form, ...contactSession, ...analyticsContext(), interests: [attendance === 'investment' ? 'Investment Forum' : PASS_INTEREST[attendance]], eventId: newEventId('investment-forum') }
+      const entry = attendance === 'investment' ? await createInvestmentRegistration(payload) : await createRegistration({ ...payload, passId: attendance, professionalCategory: PROFESSIONAL_CATEGORIES.includes(form.professionalCategory) ? form.professionalCategory : 'Other' })
       setConfirmation(entry)
-      trackJourney('registration_completed', { passId:'investment' })
+      trackJourney('registration_completed', { passId: attendance })
       requestAnimationFrame(() => document.getElementById('investment-register')?.scrollIntoView({ behavior:'smooth', block:'start' }))
     } catch (error) { setErrors({ submit:error.message || 'Registration could not be completed. Please try again.' }) }
     finally { setSubmitting(false) }
@@ -279,16 +326,19 @@ function InvestmentForumLanding() {
       <section className="investment-register" id="investment-register">
         <motion.div className="investment-poster" initial={{opacity:0,x:-30}} whileInView={{opacity:1,x:0}} viewport={{once:true,amount:.15}}><img src="/Gold%20and%20Gemstone%20Investment%20Forum.png" alt="GGCE Investment Forum — Wednesday 25 November 2026 at Lagos Oriental Hotel"/></motion.div>
         <motion.div className="investment-form-card" initial={{opacity:0,y:30}} whileInView={{opacity:1,y:0}} viewport={{once:true,amount:.15}}>
-          {!confirmation ? <form onSubmit={submit}><span className="kicker">INVITATION REGISTRATION</span><h2>Register your interest.</h2><p>Complete your details to receive your forum confirmation and event reference.</p>
-            <div className="grid two"><label>First name *<input value={form.firstName} onChange={e=>update('firstName',e.target.value)} aria-invalid={Boolean(errors.firstName)}/>{errors.firstName&&<small className="field-error">{errors.firstName}</small>}</label><label>Last name *<input value={form.lastName} onChange={e=>update('lastName',e.target.value)} aria-invalid={Boolean(errors.lastName)}/>{errors.lastName&&<small className="field-error">{errors.lastName}</small>}</label></div>
-            <label>Email address *<input type="email" value={form.email} onChange={e=>update('email',e.target.value)} aria-invalid={Boolean(errors.email)}/>{errors.email?<small className="field-error">{errors.email}</small>:<small>Your confirmation will be sent here.</small>}</label>
-            <div className="grid two"><label>Phone with country code *<input value={form.phone} onChange={e=>update('phone',e.target.value)} placeholder="+234 800 000 0000" aria-invalid={Boolean(errors.phone)}/>{errors.phone&&<small className="field-error">{errors.phone}</small>}</label><label>Country<input value={form.country} onChange={e=>update('country',e.target.value)}/></label></div>
+          {!confirmation ? <form onSubmit={step === 1 ? saveContact : submit}><span className="kicker">INVITATION REGISTRATION · {step} / 2</span><h2>Register your interest.</h2>
+            {step === 1 ? <><p>Start with your name and contact details.</p><ContactFields form={form} update={update} errors={errors}/><ContactNotice/></> : <>
+            <p className="contact-saved" role="status"><Check/> Your contact details have been saved.</p>
+            <p>Choose your attendance, then complete your registration.</p>
+            <div className="pass-options">{[{ id: 'investment', name: 'Investment Forum Invitation', note: 'Executive investment forum', price: 'Free' }, ...PASSES].map(pass => <button type="button" key={pass.id} aria-pressed={attendance === pass.id} className={attendance === pass.id ? 'pass-card selected' : 'pass-card'} onClick={() => setAttendance(pass.id)}><span><b>{pass.name}</b><small>{pass.note}</small></span><strong>{pass.price}</strong></button>)}</div>
+            <p className="selected-pass-summary"><b>{form.firstName} {form.lastName}</b><small>{form.email}</small><button type="button" onClick={() => setStep(1)}>Edit contact details</button></p>
+            <label>Country<input value={form.country} onChange={e=>update('country',e.target.value)}/></label>
             <div className="grid two"><label>Organisation or business<input value={form.organisation} onChange={e=>update('organisation',e.target.value)}/></label><label>Job title<input value={form.role} onChange={e=>update('role',e.target.value)}/></label></div>
             <label>Executive category *<div className="select-wrap"><select value={form.professionalCategory} onChange={e=>update('professionalCategory',e.target.value)} aria-invalid={Boolean(errors.professionalCategory)}><option value="">Select category</option>{INVESTMENT_AUDIENCE.map(item=><option key={item}>{item}</option>)}</select><ChevronDown/></div>{errors.professionalCategory&&<small className="field-error">{errors.professionalCategory}</small>}</label>
             <label className="check"><input type="checkbox" checked={form.consent} onChange={e=>update('consent',e.target.checked)}/><span>{form.consent&&<Check/>}</span>I agree to essential registration communications and acknowledge the <a href="/legal/privacy" target="_blank">Privacy Notice</a> and <a href="/legal/event" target="_blank">Event Terms</a>.</label>{errors.consent&&<small className="field-error">{errors.consent}</small>}
             <label className="check optional-consent"><input type="checkbox" checked={form.marketingConsent} onChange={e=>update('marketingConsent',e.target.checked)}/><span>{form.marketingConsent&&<Check/>}</span>Send me optional GGCE news and future event updates.</label>
-            {errors.submit&&<p className="form-error" role="alert">{errors.submit}</p>}<button className="investment-submit" disabled={submitting}>{submitting?'Submitting securely…':'Complete registration'} <ArrowRight/></button><div className="secure"><ShieldCheck/> Your details are encrypted and never shared.</div>
-          </form> : <div className="investment-success"><BadgeCheck/><span className="kicker">REGISTRATION CONFIRMED</span><h2>Your place at the forum is confirmed.</h2><p>We have sent the event details to <b>{confirmation.email}</b>. Keep this reference for your records.</p><div><small>REGISTRATION REFERENCE</small><strong>{confirmation.id}</strong></div><button onClick={addForumCalendar}><CalendarDays/> Add to calendar</button></div>}
+            </>}{errors.submit&&<p className="form-error" role="alert">{errors.submit}</p>}<button className="investment-submit" disabled={submitting}>{submitting ? (step === 1 ? 'Saving your details…' : 'Submitting securely…') : step === 1 ? 'Next' : 'Complete registration'} <ArrowRight/></button><div className="secure"><ShieldCheck/> Your details are encrypted and never shared.</div>
+          </form> : <div className="investment-success"><BadgeCheck/><span className="kicker">{confirmation.status === 'pending' ? 'RESERVATION RECEIVED' : 'REGISTRATION CONFIRMED'}</span><h2>{confirmation.status === 'pending' ? 'Your reservation has been received.' : 'Your registration is confirmed.'}</h2><p>{confirmation.status === 'pending' ? 'The team will send payment instructions to' : 'Your registration email is'} <b>{confirmation.email}</b>. Keep this reference for your records.</p><div><small>REGISTRATION REFERENCE</small><strong>{confirmation.id}</strong></div><button onClick={addForumCalendar}><CalendarDays/> Add to calendar</button></div>}
         </motion.div>
       </section>
 
@@ -305,10 +355,12 @@ function InvestmentForumLanding() {
   </div>
 }
 
-function MainConference() {
-  const campaignPage = CAMPAIGNS[location.pathname]
+function MainConference({ special = false }) {
+  const availablePasses = special ? RCCG_PASSES : PASSES
+  const campaignPage = special ? { eyebrow: 'SPECIAL ATTENDEES · RCCG YOUTH', title: 'Learn new skills. Discover your place in the gold and gemstone industry.', lead: 'A special invitation for young people in the Redeemed Christian Church of God. Build practical knowledge, meet the industry and explore opportunities for your future.', pass: 'general' } : CAMPAIGNS[location.pathname]
   const [form, setForm] = useState(() => ({ ...initialForm, pass: campaignPage?.pass || 'general' }))
   const [step, setStep] = useState(1)
+  const [contactSession] = useState(newContactSession)
   const [errors, setErrors] = useState({})
   const [submitting, setSubmitting] = useState(false)
   const [ticket, setTicket] = useState(null)
@@ -325,15 +377,15 @@ function MainConference() {
   const heroScale = useTransform(scrollY, [0, 700], [1, 1.08])
   const heroOpacity = useTransform(scrollY, [0, 620], [1, 0.3])
 
-  const selectedPass = useMemo(() => PASSES.find(p => p.id === form.pass), [form.pass])
+  const selectedPass = useMemo(() => availablePasses.find(p => p.id === form.pass) || availablePasses[0], [form.pass])
   const update = (key, value) => { if (['firstName','lastName','email','phone'].includes(key) && !formStartedRef.current) { formStartedRef.current = true; trackJourney('form_started'); metaCustomEvent('FormStart') }; setErrors(prev => ({ ...prev, [key]: '' })); setForm(prev => ({ ...prev, [key]: value })) }
   const toggleInterest = value => update('interests', form.interests.includes(value) ? form.interests.filter(item => item !== value) : [...form.interests, value])
   function choosePass(passId) {
     const suggestedInterest = PASS_INTEREST[passId]
-    setForm(prev => ({ ...prev, pass: passId, interests: prev.interests.length || !suggestedInterest ? prev.interests : [suggestedInterest] }))
+    setForm(prev => ({ ...prev, pass: passId, interests: [...new Set([...prev.interests.filter(item => item !== PASS_INTEREST[prev.pass]), ...(suggestedInterest ? [suggestedInterest] : [])])] }))
     setErrors(prev => ({ ...prev, pass: '', interests: '' }))
-    trackJourney('pass_selected', { passId }); setStep(2)
-    metaEvent('ViewContent', { content_name: PASSES.find(item=>item.id===passId)?.name, content_ids:[passId], content_type:'product' })
+    trackJourney('pass_selected', { passId })
+    metaEvent('ViewContent', { content_name: availablePasses.find(item=>item.id===passId)?.name, content_ids:[passId], content_type:'product' })
   }
 
   function openRegistration(event) {
@@ -379,9 +431,18 @@ function MainConference() {
     }
   }, [])
 
-  function next(e) {
+  async function next(e) {
     e.preventDefault()
-    if (step === 1) choosePass(form.pass)
+    const validation = contactErrors(form)
+    if (Object.keys(validation).length) return setErrors(validation)
+    setSubmitting(true); setErrors({})
+    try {
+      await saveRegistrationContact({ ...contactSession, firstName: form.firstName, lastName: form.lastName, email: form.email, phone: form.phone, ...analyticsContext(), audience: special ? 'rccg' : 'public', landingPage: location.pathname })
+      choosePass(form.pass)
+      trackJourney('details_completed')
+      setStep(2)
+    } catch (error) { setErrors({ submit: error.message || 'Your details could not be saved. Please try again.' }) }
+    finally { setSubmitting(false) }
   }
 
   async function register() {
@@ -397,7 +458,7 @@ function MainConference() {
       if (!form.consent) throw new Error('Please agree to receive the essential registration and ticket communications.')
       setSubmitting(true); trackJourney('details_completed')
       const eventId = newEventId('registration')
-      const entry = await createRegistration({ ...form, ...analyticsContext(), eventId, passId: selectedPass.id, passName: selectedPass.name })
+      const entry = await createRegistration({ ...form, ...contactSession, audience: special ? 'rccg' : 'public', ...analyticsContext(), eventId, passId: selectedPass.id, passName: selectedPass.name })
       trackJourney('registration_completed', { passId: selectedPass.id })
       metaEvent('Lead', { content_name:selectedPass.name, value:selectedPass.id==='general'?0:Number(selectedPass.price.replace(/[^0-9]/g,'')), currency:'NGN' }, eventId)
       if (entry.status === 'valid') metaEvent('CompleteRegistration', { content_name:selectedPass.name, value:0, currency:'NGN' }, `${eventId}-complete`)
@@ -442,7 +503,7 @@ function MainConference() {
 
   return <>
     <header className="nav"><Logo/><nav className={menuOpen ? 'open' : ''}>
-      <a href="#experience">Experience</a><a href="/#investments">Investment Forum</a><a href="#book">Free book</a><a href="#passes">Passes</a><a href="#verify">Verify ticket</a><a href="#faq">FAQ</a>
+      <a href="#experience">Experience</a>{!special && <a href="/#investments">Investment Forum</a>}<a href="#book">Free book</a><a href="#register" onClick={openRegistration}>Attendance</a><a href="#verify">Verify ticket</a><a href="#faq">FAQ</a>
     </nav><div className="nav-actions"><a className="nav-cta" href="#register" onClick={openRegistration}>Register now</a><button className="menu" aria-label={menuOpen ? 'Close navigation' : 'Open navigation'} aria-expanded={menuOpen} onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? <X/> : <Menu/>}</button></div>
     </header>
 
@@ -470,27 +531,30 @@ function MainConference() {
 
       <section className="register-section">
         <motion.div className="register-story" initial={{opacity:0,x:-30}} whileInView={{opacity:1,x:0}} viewport={{once:true,amount:.3}} transition={{duration:.7}}>
-          <span className="kicker">YOUR INVITATION</span>
+          <span className="kicker">{special ? 'RCCG YOUTH · SPECIAL ATTENDEES' : 'YOUR INVITATION'}</span>
           <h2>Your place at the centre of Africa’s <em>mineral economy.</em></h2>
-          <p>Join policy makers, investors, miners, designers and global buyers for five days of ideas, opportunity and exceptional craft.</p>
-          <div className="register-points"><div><strong>01</strong><span><b>Choose</b>Select the right experience</span></div><div><strong>02</strong><span><b>Register</b>Share only the essentials</span></div><div><strong>03</strong><span><b>Confirm</b>Free QR pass or paid reservation status</span></div></div>
-          <div className="register-note"><ShieldCheck/><span><b>Clear confirmation</b>Free passes are issued instantly. Paid tickets follow payment verification.</span></div>
+          <p>{special ? 'Take your next step with practical learning and new connections. Choose a sponsored masterclass or attend the exhibition for free.' : 'Join policy makers, investors, miners, designers and global buyers for five days of ideas, opportunity and exceptional craft.'}</p>
+          <div className="register-points"><div><strong>01</strong><span><b>Start</b>Share your contact details</span></div><div><strong>02</strong><span><b>Choose</b>Select how you want to attend</span></div><div><strong>03</strong><span><b>Confirm</b>{special ? 'Receive your free QR pass' : 'Free QR pass or paid reservation status'}</span></div></div>
+          <div className="register-note"><ShieldCheck/><span><b>Clear confirmation</b>{special ? 'Your sponsored masterclass or general admission pass is free.' : 'Free passes are issued instantly. Paid tickets follow payment verification.'}</span></div>
         </motion.div>
         <div className="registration-stage" id="register" ref={registrationRef}>
         <motion.div className="registration-shell" initial={{opacity:0,y:35,scale:.98}} whileInView={{opacity:1,y:0,scale:1}} viewport={{once:true,amount:.15}} transition={{duration:.55,ease:[.2,.8,.2,1]}}>
           <div className="reg-head"><div><span>YOUR ENTRY PASS</span><h2>{step === 3 ? 'You’re on the list.' : 'Register in minutes.'}</h2></div><div className="step">{step < 3 ? `${step} / 2` : <BadgeCheck/>}</div></div>
-          {step === 1 && <form onSubmit={next} className="pass-step">
+          {step === 1 && <form onSubmit={next} className="details-step">
             <div className="mini-progress"><i className="active"/><i/></div>
-            <p className="form-intro">Choose your access first. Free exhibition registration does not include paid conference, VIP or gala experiences.</p>
-            <div className="pass-options">{PASSES.map(p => <button type="button" key={p.id} className={form.pass === p.id ? 'pass-card selected' : 'pass-card'} onClick={() => update('pass', p.id)}><span className="radio">{form.pass === p.id && <i/>}</span><span><b>{p.name}</b><small>{p.note}</small></span><strong>{p.price}</strong></button>)}</div>
-            <button className="form-cta">Continue with {selectedPass.name} <ArrowRight/></button>
+            <p className="form-intro">Start with your name and contact details. It only takes a moment.</p>
+            <ContactFields form={form} update={update} errors={errors}/>
+            <ContactNotice/>
+            {errors.submit && <p className="form-error" role="alert">{errors.submit}</p>}
+            <button className="form-cta" disabled={submitting}>{submitting ? 'Saving your details…' : 'Next'} <ArrowRight/></button>
           </form>}
           {step === 2 && <div className="details-step">
             <div className="mini-progress"><i className="active"/><i className="active"/></div>
-            <p className="selected-pass-summary"><span>Selected pass</span><b>{selectedPass.name}</b><strong>{selectedPass.price}</strong><button onClick={()=>setStep(1)}>Change</button></p>
-            <div className="grid two"><label>First name *<input required value={form.firstName} onChange={e => update('firstName', e.target.value)} placeholder="Ada" aria-invalid={Boolean(errors.firstName)}/>{errors.firstName&&<small className="field-error">{errors.firstName}</small>}</label><label>Last name *<input required value={form.lastName} onChange={e => update('lastName', e.target.value)} placeholder="Okafor" aria-invalid={Boolean(errors.lastName)}/>{errors.lastName&&<small className="field-error">{errors.lastName}</small>}</label></div>
-            <label>Email address *<input type="email" required value={form.email} onChange={e => update('email', e.target.value)} placeholder="ada@company.com" aria-invalid={Boolean(errors.email)}/>{errors.email?<small className="field-error">{errors.email}</small>:<small>Your confirmation, pass or reservation, and complimentary book will be sent here.</small>}</label>
-            <div className="grid two"><label>Phone with country code *<input required value={form.phone} onChange={e => update('phone', e.target.value)} placeholder="+234 800 000 0000" aria-invalid={Boolean(errors.phone)}/>{errors.phone&&<small className="field-error">{errors.phone}</small>}</label><label>Country<div className="select-wrap"><select value={form.country} onChange={e => update('country', e.target.value)}><option>Nigeria</option><option>Ghana</option><option>South Africa</option><option>United Kingdom</option><option>United States</option><option>Other</option></select><ChevronDown/></div></label></div>
+            <p className="contact-saved" role="status"><Check/> Your contact details have been saved.</p>
+            <p className="form-intro">{special ? 'Choose a sponsored masterclass or free general attendance. Both options are free for this invitation.' : 'How would you like to attend? Choose free general attendance or a paid experience.'}</p>
+            <div className="pass-options">{availablePasses.map(p => <button type="button" key={p.id} aria-pressed={form.pass === p.id} className={form.pass === p.id ? 'pass-card selected' : 'pass-card'} onClick={() => choosePass(p.id)}><span className="radio">{form.pass === p.id && <i/>}</span><span><b>{p.name}</b><small>{p.note}</small></span><strong>{p.price}</strong></button>)}</div>
+            <p className="selected-pass-summary"><span>Contact details</span><b>{form.firstName} {form.lastName}</b><small>{form.email}</small><button onClick={()=>setStep(1)}>Edit</button></p>
+            <label>Country<div className="select-wrap"><select value={form.country} onChange={e => update('country', e.target.value)}><option>Nigeria</option><option>Ghana</option><option>South Africa</option><option>United Kingdom</option><option>United States</option><option>Other</option></select><ChevronDown/></div></label>
             <div className="grid two"><label>Organisation or business <span className="optional">Optional</span><input value={form.organisation} onChange={e => update('organisation', e.target.value)} placeholder="Company name"/></label><label>Job title <span className="optional">Optional</span><input value={form.role} onChange={e => update('role', e.target.value)} placeholder="Your role"/></label></div>
             <label>Professional category *<div className="select-wrap"><select value={form.professionalCategory} onChange={e=>update('professionalCategory',e.target.value)} aria-invalid={Boolean(errors.professionalCategory)}><option value="">Select category</option>{PROFESSIONAL_CATEGORIES.map(item=><option key={item}>{item}</option>)}</select><ChevronDown/></div>{errors.professionalCategory&&<small className="field-error">{errors.professionalCategory}</small>}</label>
             <fieldset className="interest-options"><legend>Event interests *</legend>{EVENT_INTERESTS.map(item=><label key={item}><input type="checkbox" checked={form.interests.includes(item)} onChange={()=>toggleInterest(item)}/><span>{form.interests.includes(item)&&<Check/>}</span>{item}</label>)}{errors.interests&&<small className="field-error">{errors.interests}</small>}</fieldset>
@@ -527,24 +591,36 @@ function MainConference() {
         <article><span>03</span><Users/><h3>Meet the right people</h3><p>Connect with exhibitors, traders, designers, manufacturers, investors and stakeholders.</p></article>
       </div></section>
 
-      <section className="experiences" aria-labelledby="experiences-title"><div className="section-heading"><span className="kicker">EVENT EXPERIENCES</span><h2 id="experiences-title">Choose where you want to participate.</h2><p>Each experience has its own access conditions. General exhibition registration does not include paid programmes.</p></div><div className="experience-grid">{EXPERIENCES.map(([name,description,passId])=><article key={name}><Gem/><h3>{name}</h3><p>{description}</p><a href="#register" onClick={e=>{e.preventDefault();choosePass(passId);openRegistration()}}>Register for {name} <ArrowRight/></a></article>)}</div><div className="section-cta"><a href="#register" onClick={openRegistration}>Register for GGCE 2026 <ArrowRight/></a></div></section>
+      {!special && <section className="experiences" aria-labelledby="experiences-title"><div className="section-heading"><span className="kicker">EVENT EXPERIENCES</span><h2 id="experiences-title">Choose where you want to participate.</h2><p>Each experience has its own access conditions. General exhibition registration does not include paid programmes.</p></div><div className="experience-grid">{EXPERIENCES.map(([name,description,passId])=><article key={name}><Gem/><h3>{name}</h3><p>{description}</p><a href="#register" onClick={e=>{e.preventDefault();choosePass(passId);openRegistration()}}>Register for {name} <ArrowRight/></a></article>)}</div><div className="section-cta"><a href="#register" onClick={openRegistration}>Register for GGCE 2026 <ArrowRight/></a></div></section>}
 
       <section className="book-section" id="book" aria-labelledby="book-title"><motion.div className="book-visual" initial={{opacity:0,x:-35}} whileInView={{opacity:1,x:0}} viewport={{once:true,amount:.2}} transition={{duration:.7}}><img src="/The%20Million%20Naira%20Opportunity%20Book%20Mockup.png" alt="The Million Naira Opportunity — a GGCE Lagos 2026 digital publication"/></motion.div><motion.div className="book-copy" initial={{opacity:0,y:28}} whileInView={{opacity:1,y:0}} viewport={{once:true,amount:.3}} transition={{duration:.65}}><span className="kicker light">COMPLIMENTARY DIGITAL BOOK</span><h2 id="book-title">Discover your place in Nigeria’s <em>million-naira opportunity.</em></h2><p>A practical introduction to earning possibilities across the gold, gemstone and jewellery economy — whether or not you own a mine.</p><ul><li><Check/> Explore opportunities across the value chain</li><li><Check/> Learn where skills, trade and enterprise meet</li><li><Check/> Receive the complete digital publication by email</li></ul><div className="book-gate"><ShieldCheck/><span><b>Available to registered attendees</b>Complete the GGCE registration form to receive and download your copy.</span></div><a href="#register" onClick={openRegistration}>Register and get the free book <ArrowRight/></a></motion.div></section>
 
       <section className="event-proof"><div><span className="kicker light">COME MEET THE INDUSTRY</span><h2>Built around real conversations and real opportunity.</h2><p>See the official GGCE event footage while you explore the programme. Speaker, exhibitor and partner details will only be published when verified.</p><a href="#register" onClick={openRegistration}>Choose your pass <ArrowRight/></a></div><video src="/vid1.mp4" muted loop autoPlay playsInline preload="metadata" aria-label="Official GGCE event footage"/></section>
 
-      <section className="pass-section" id="passes"><div className="pass-heading-row"><div className="section-heading"><span className="kicker">CHOOSE YOUR EXPERIENCE</span><h2>A pass for every ambition.</h2></div><div className="carousel-controls" aria-label="Browse passes"><button onClick={() => scrollPasses(-1)} aria-label="Previous passes"><ChevronLeft/></button><button onClick={() => scrollPasses(1)} aria-label="Next passes"><ChevronRight/></button></div></div><div className="pricing" ref={passCarouselRef}>{PASSES.map((p, i) => <article key={p.id} className={i === 1 ? 'featured' : ''}><span className="tag">{p.accent}</span><h3>{p.name}</h3><strong>{p.price}</strong><p>{p.note}</p><ul>{p.features.map(x => <li key={x}><Check/> {x}</li>)}</ul><a href="#register" onClick={e => { e.preventDefault(); choosePass(p.id); openRegistration() }}>Register for {p.name} <ArrowRight/></a></article>)}</div><div className="carousel-hint"><span>Scroll to explore all passes</span><i/></div></section>
+      {step > 1 && !special && <section className="pass-section" id="passes"><div className="pass-heading-row"><div className="section-heading"><span className="kicker">CHOOSE YOUR EXPERIENCE</span><h2>A pass for every ambition.</h2></div><div className="carousel-controls" aria-label="Browse passes"><button onClick={() => scrollPasses(-1)} aria-label="Previous passes"><ChevronLeft/></button><button onClick={() => scrollPasses(1)} aria-label="Next passes"><ChevronRight/></button></div></div><div className="pricing" ref={passCarouselRef}>{PASSES.map((p, i) => <article key={p.id} className={i === 1 ? 'featured' : ''}><span className="tag">{p.accent}</span><h3>{p.name}</h3><strong>{p.price}</strong><p>{p.note}</p><ul>{p.features.map(x => <li key={x}><Check/> {x}</li>)}</ul><a href="#register" onClick={e => { e.preventDefault(); choosePass(p.id); openRegistration() }}>Register for {p.name} <ArrowRight/></a></article>)}</div><div className="carousel-hint"><span>Scroll to explore all passes</span><i/></div></section>}
 
       <section className="verify" id="verify"><div><span className="kicker light">TICKET DESK</span><h2>Already registered?</h2><p>Enter your private ticket reference to view its current status.</p></div><div className="lookup"><label>Ticket reference</label><div><input value={lookup} onChange={e => setLookup(e.target.value)} onKeyDown={e => e.key === 'Enter' && verify()} placeholder="e.g. GGCE26-A1B2C3"/><button onClick={() => verify()}><QrCode/> Check pass</button></div>{lookupResult !== undefined && <div className={lookupResult ? (lookupResult.status === 'valid' ? 'result good' : 'result pending') : 'result bad'}>{lookupResult ? <><BadgeCheck/><span><b>{lookupResult.status === 'valid' ? 'Valid registration' : lookupResult.status === 'used' ? 'Already checked in' : 'Awaiting payment'}</b>{lookupResult.firstName} {lookupResult.lastName} · {lookupResult.passName}</span></> : <><X/><span><b>Pass not found</b>Check the ticket reference and try again.</span></>}</div>}</div></section>
 
-      <section className="faq" id="faq"><div><span className="kicker">GOOD TO KNOW</span><h2>Questions,<br/>answered.</h2><p>Need help? Email <a href="mailto:ggcelagos@gmail.com">ggcelagos@gmail.com</a>.</p></div><div>{[['Is exhibition access really free?','Yes. General Admission provides free exhibition-floor access. It does not include paid conference, VIP, masterclass or gala experiences.'],['When will I receive my pass?','Free attendees receive a QR pass after successful registration. Paid registrations receive a reservation reference first; the QR ticket is issued only after payment is confirmed.'],['How are payments handled?','The GGCE team sends verified payment instructions for paid reservations. Do not treat a reservation reference as proof of entry.'],['Can I change or transfer my registration?','Contact the GGCE team with your ticket reference. Corrections and transfers are reviewed under the event and refund policies.'],['Can I register a group?','Yes. For groups and corporate bookings, contact the team for assisted registration.'],['What should I bring?','Bring the QR pass on your phone and a valid photo ID for verification.']].map(([q,a]) => <details key={q}><summary>{q}<span>+</span></summary><p>{a}</p></details>)}</div></section>
-      <section className="bottom-cta"><span className="kicker light">24–28 NOVEMBER 2026 · LAGOS</span><h2>Come meet the industry.</h2><p>Choose free exhibition access or reserve the paid GGCE experience that fits your goals.</p><a href="#register" onClick={openRegistration}>Register for GGCE 2026 <ArrowRight/></a></section>
+      <section className="faq" id="faq"><div><span className="kicker">GOOD TO KNOW</span><h2>Questions,<br/>answered.</h2><p>Need help? Email <a href="mailto:ggcelagos@gmail.com">ggcelagos@gmail.com</a>.</p></div><div>{(special ? [['Who is this invitation for?', 'Young people in the Redeemed Christian Church of God who want to learn and explore opportunities in the gold, gemstone and jewellery industry.'], ['Is the masterclass sponsored?', 'Yes. Choose Sponsored Masterclass after saving your contact details. This invitation covers your masterclass attendance at no cost to you.'], ['Can I attend the exhibition instead?', 'Yes. Choose General Admission for free exhibition access.'], ['When do I receive my pass?', 'Complete registration to receive your free QR pass. Bring it with you for entry.']] : [['Is exhibition access really free?','Yes. General Admission provides free exhibition-floor access. It does not include paid conference, VIP, masterclass or gala experiences.'],['When will I receive my pass?','Free attendees receive a QR pass after successful registration. Paid registrations receive a reservation reference first; the QR ticket is issued only after payment is confirmed.'],['How are payments handled?','The GGCE team sends verified payment instructions for paid reservations. Do not treat a reservation reference as proof of entry.'],['Can I change or transfer my registration?','Contact the GGCE team with your ticket reference. Corrections and transfers are reviewed under the event and refund policies.'],['Can I register a group?','Yes. For groups and corporate bookings, contact the team for assisted registration.'],['What should I bring?','Bring the QR pass on your phone and a valid photo ID for verification.']]).map(([q,a]) => <details key={q}><summary>{q}<span>+</span></summary><p>{a}</p></details>)}</div></section>
+      <section className="bottom-cta"><span className="kicker light">24–28 NOVEMBER 2026 · LAGOS</span><h2>Come meet the industry.</h2><p>{special ? 'Sponsored learning and free exhibition access for RCCG young people.' : 'Start with your contact details and choose the GGCE experience that fits your goals.'}</p><a href="#register" onClick={openRegistration}>Register for GGCE 2026 <ArrowRight/></a></section>
       <section className="privacy" id="privacy"><span className="kicker">PRIVACY & TERMS</span><h2>Clear choices. Responsible registration.</h2><div><p>GGCE uses the details you submit to manage registration, reservations, tickets, essential event communication and secure entry. Optional journey analytics runs only if you accept it.</p><p>Our Legal Centre explains data use, ticket and event rules, refunds, browser storage, acceptable use and how to exercise your privacy rights.</p><p><a href="/legal">Open the Legal Centre →</a></p></div></section>
     </main>
     <footer><Logo/><p>Africa’s premier Gold & Gemstone Conference & Exhibition.</p><div><a href="/legal">Legal</a><a href="/legal/privacy">Privacy</a><a href="/legal/terms">Terms</a><a href="/legal/refunds">Refunds</a><button onClick={() => dispatchEvent(new Event(privacySettingsEvent))}>Cookie settings</button><a href="mailto:ggcelagos@gmail.com">Contact</a><span>© 2026 GGCE</span></div></footer>
     <a className="mobile-register" href="#register" onClick={openRegistration}>Register for GGCE 2026 <ArrowRight/></a>
     <CookieConsent/>
   </>
+}
+
+function SpecialAttendees() {
+  useEffect(() => {
+    const robots = document.createElement('meta')
+    robots.name = 'robots'; robots.content = 'noindex, nofollow, noarchive'
+    document.head.appendChild(robots)
+    const title = document.title
+    document.title = 'RCCG Youth · Special Attendees | GGCE 2026'
+    return () => { robots.remove(); document.title = title }
+  }, [])
+  return <MainConference special/>
 }
 
 function App() {
@@ -554,6 +630,7 @@ function App() {
     addEventListener('hashchange', updateRoute)
     return () => removeEventListener('hashchange', updateRoute)
   }, [])
+  if (location.pathname.replace(/\/$/, '') === '/special-attendees/rccg') return <SpecialAttendees />
   if (location.pathname.startsWith('/legal')) return <LegalCentre />
   if (location.pathname.startsWith('/admin')) return <AdminDashboard />
   if (routeHash === '#investments') return <InvestmentForumLanding />

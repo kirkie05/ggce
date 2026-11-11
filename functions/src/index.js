@@ -6,7 +6,7 @@ const { initializeApp } = require('firebase-admin/app')
 const { getAuth } = require('firebase-admin/auth')
 const { FieldValue, getFirestore, Timestamp } = require('firebase-admin/firestore')
 const crypto = require('node:crypto')
-const { escapeHtml, lookupKey, normalizeEmail, normalizePhone, passes, statusForPass, text, ticketId, ticketReference } = require('./domain')
+const { contactDetails, registrationPass, escapeHtml, lookupKey, normalizeEmail, normalizePhone, text, ticketId, ticketReference } = require('./domain')
 
 initializeApp()
 const db = getFirestore()
@@ -82,9 +82,55 @@ async function sendMetaEvent(eventName, eventId, user, customData = {}) {
   if (!response.ok) console.error('Meta Conversions API failed', response.status, await response.text())
 }
 
+// Save the first step independently; a contact lead is not a registration or ticket.
+exports.saveRegistrationContact = onCall({ region, enforceAppCheck: true }, async request => {
+  await rateLimit(request, 'registration-contact', 12)
+  const data = request.data || {}, contact = contactDetails(data)
+  if (!contact) throw new HttpsError('invalid-argument', 'Enter your name, valid email and phone number.')
+  const id = ticketReference(data.contactId), token = text(data.contactToken, 80)
+  if (!id || !/^[a-f0-9]{64}$/.test(token)) throw new HttpsError('invalid-argument', 'Invalid contact session. Please refresh and try again.')
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex')
+  const ref = db.collection('registrationLeads').doc(id)
+  await db.runTransaction(async tx => {
+    const snap = await tx.get(ref)
+    if (snap.exists && snap.data().tokenHash !== tokenHash) throw new HttpsError('permission-denied', 'Invalid contact session.')
+    tx.set(ref, {
+      ...contact, tokenHash, audience: data.audience === 'rccg' ? 'rccg' : 'public',
+      registrationFlow: data.registrationFlow === 'investment' ? 'investment' : 'conference',
+      source: text(data.source, 100), campaign: text(data.campaign, 120),
+      landingPage: text(data.landingPage, 220),
+      status: snap.data()?.status || 'incomplete',
+      createdAt: snap.data()?.createdAt || FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+      expiresAt: Timestamp.fromMillis(Date.now() + 90 * 86400000),
+    }, { merge: true })
+  })
+  return { id, saved: true }
+})
+
+exports.purgeExpiredRegistrationContacts = onSchedule({ region, schedule: 'every 24 hours', timeZone: 'Africa/Lagos' }, async () => {
+  // Limit work per invocation; expired records remain inaccessible to the public.
+  for (let page = 0; page < 20; page++) {
+    const snap = await db.collection('registrationLeads').where('expiresAt', '<=', Timestamp.fromMillis(Date.now())).limit(500).get()
+    if (snap.empty) break
+    const batch = db.batch()
+    snap.docs.forEach(doc => batch.delete(doc.ref))
+    await batch.commit()
+    if (snap.size < 500) break
+  }
+})
+
+exports.adminListRegistrationContacts = onCall({ region, enforceAppCheck: true }, async request => {
+  requireAdmin(request)
+  const snap = await db.collection('registrationLeads').orderBy('createdAt', 'desc').limit(2000).get()
+  return { contacts: snap.docs.map(doc => {
+    const { tokenHash, ...contact } = doc.data()
+    return { ...contact, id: doc.id, createdAt: contact.createdAt?.toDate?.().toISOString() || null }
+  }) }
+})
+
 exports.createRegistration = onCall({ region, secrets: [resendKey, metaCapiToken], enforceAppCheck: true }, async request => {
   await rateLimit(request, 'registration', 8)
-  const data = request.data || {}; const pass = passes[text(data.passId, 40)]
+  const data = request.data || {}; const pass = registrationPass(text(data.passId, 40), data.audience)
   if (!pass) throw new HttpsError('invalid-argument', 'Select a valid pass.')
   const firstName = text(data.firstName, 60), lastName = text(data.lastName, 60), email = normalizeEmail(data.email), phone = normalizePhone(data.phone)
   if (!firstName || !lastName || !/^\S+@\S+\.\S+$/.test(email)) throw new HttpsError('invalid-argument', 'Valid name and email are required.')
@@ -93,9 +139,9 @@ exports.createRegistration = onCall({ region, secrets: [resendKey, metaCapiToken
   const interests = Array.isArray(data.interests) ? [...new Set(data.interests.map(value => text(value, 80)).filter(value => eventInterests.has(value)))].slice(0, 6) : []
   if (!professionalCategories.has(category)) throw new HttpsError('invalid-argument', 'Select a valid professional category.')
   if (!interests.length) throw new HttpsError('invalid-argument', 'Select at least one event interest.')
-  const id = ticketId(), status = statusForPass(text(data.passId, 40)), eventId = text(data.eventId, 100)
+  const id = ticketId(), status = pass.price === 0 ? 'valid' : 'pending', eventId = text(data.eventId, 100)
   const registration = {
-    id, firstName, lastName, email, phone, country: text(data.country, 80),
+    id, firstName, lastName, email, phone, audience: data.audience === 'rccg' ? 'rccg' : 'public', country: text(data.country, 80),
     organisation: text(data.organisation, 120), role: text(data.role, 120), passId: text(data.passId, 40),
     professionalCategory: category, interests, marketingConsent: data.marketingConsent === true, analyticsConsent: data.analyticsConsent === true,
     passName: pass.name, amount: pass.price, status, leadStatus: status === 'valid' ? 'Qualified' : 'Payment Pending', adminNotes: '', followUpDate: null,
@@ -107,10 +153,16 @@ exports.createRegistration = onCall({ region, secrets: [resendKey, metaCapiToken
   }
   const emailLookup = db.collection('registrationLookup').doc(lookupKey('email', email))
   const phoneLookup = phone ? db.collection('registrationLookup').doc(lookupKey('phone', phone)) : null
+  const contactId = ticketReference(data.contactId)
+  const contactRef = contactId ? db.collection('registrationLeads').doc(contactId) : null
+  const contactTokenHash = crypto.createHash('sha256').update(text(data.contactToken, 80)).digest('hex')
   await db.runTransaction(async tx => {
     const lookups = await Promise.all([tx.get(emailLookup), ...(phoneLookup ? [tx.get(phoneLookup)] : [])])
+    const contact = contactRef ? await tx.get(contactRef) : null
+    if (contactRef && (!contact.exists || contact.data().tokenHash !== contactTokenHash || contact.data().email !== email)) throw new HttpsError('permission-denied', 'Save your contact details again before registering.')
     if (lookups.some(snap => snap.exists)) throw new HttpsError('already-exists', 'A registration already exists for this email or phone number. Contact GGCE support to make a correction.')
     tx.create(db.collection('registrations').doc(id), registration)
+    if (contactRef) tx.update(contactRef, { status: 'completed', registrationId: id, updatedAt: FieldValue.serverTimestamp() })
     tx.create(emailLookup, { registrationId: id, type: 'email', createdAt: FieldValue.serverTimestamp() })
     if (phoneLookup) tx.create(phoneLookup, { registrationId: id, type: 'phone', createdAt: FieldValue.serverTimestamp() })
     if (status === 'valid') tx.create(db.collection('tickets').doc(id), { id, registrationId: id, status: 'valid', scannedAt: null, createdAt: FieldValue.serverTimestamp() })
@@ -151,7 +203,7 @@ exports.adminGetAnalytics = onCall({ region, enforceAppCheck: true }, async requ
     events.filter(event => event.name === 'page_view').forEach(event => { const label = event[key] || 'Unknown'; (buckets[label] ||= new Set()).add(event.sessionId) })
     return Object.entries(buckets).map(([label, sessions]) => ({ label, value: sessions.size })).sort((a, b) => b.value - a.value).slice(0, 8)
   }
-  const funnel = ['page_view','registration_view','pass_selected','form_started','details_completed','registration_completed'].map(name => ({ name, sessions: unique(name) }))
+  const funnel = ['page_view','registration_view','form_started','details_completed','pass_selected','registration_completed'].map(name => ({ name, sessions: unique(name) }))
   const registrationsSnap = await db.collection('registrations').where('createdAt', '>=', cutoff).limit(10000).get()
   const registrations = registrationsSnap.docs.map(doc => doc.data())
   const countBy = key => Object.entries(registrations.reduce((out, row) => { const values = Array.isArray(row[key]) ? row[key] : [row[key] || 'Unknown']; values.forEach(value => out[value] = (out[value] || 0) + 1); return out }, {})).map(([label,value])=>({label,value})).sort((a,b)=>b.value-a.value)
